@@ -57,6 +57,7 @@ class Gateway:
         self.no_player = 0
         self.plain_chats = 0      # conversations answered without the tools (see _plain_chat)
         self.rp_retries = 0       # roleplay replies said again because they slipped out of the world
+        self.repeated_calls = 0   # tool calls a model made twice in one turn, answered with words instead (see _say_instead)
         # A debugging aid: MIND_CAPTURE=<file> appends every request that leaves for a model (after the personality is
         # added) as a JSON line, so real traffic can be replayed against another model. Off unless the variable is set.
         self.capture_path = os.environ.get("MIND_CAPTURE", "")
@@ -151,6 +152,9 @@ class Gateway:
                 self.inflight -= 1
 
         message = (answer.get("choices") or [{}])[0].get("message") or {}
+        if lane == "smart" and ident.bot_guid and self._repeats_a_call(prepared, message):
+            answer = self._say_instead(prepared, name, ident, answer)
+            message = (answer.get("choices") or [{}])[0].get("message") or {}
         # Only a bot talking is cleaned. A request that names no bot (the dashboard's persona writer, a test) wants
         # its text exactly as the model wrote it.
         if lane == "smart" and ident.bot_guid and isinstance(message.get("content"), str) \
@@ -174,6 +178,29 @@ class Gateway:
                               "latency_ms": meta["latency_ms"], "cost_usd": meta["cost_usd"],
                               "tool_calls": tools}
         return 200, answer
+
+    def _repeats_a_call(self, body, message):
+        """True when every tool call in the model's answer is one this turn already made. A small model's habit: the tool said it worked and
+        the model calls it again instead of saying so, and the module would run it twice."""
+        calls = message.get("tool_calls") or []
+        messages = body.get("messages") or []
+        last_user = max((i for i, m in enumerate(messages) if isinstance(m, dict) and m.get("role") == "user"), default=-1)
+        earlier = {_call_signature(call) for m in messages[last_user + 1:] if isinstance(m, dict) and m.get("role") == "assistant"
+                   for call in m.get("tool_calls") or []}
+        return bool(calls) and bool(earlier) and all(_call_signature(call) in earlier for call in calls)
+
+    def _say_instead(self, body, profile, ident, answer):
+        """The same request without the tools, so the next message is the words. The first answer stands if that fails or says nothing."""
+        again = copy.deepcopy(body)
+        again.pop("tools", None)
+        again.pop("tool_choice", None)
+        self.repeated_calls += 1
+        try:
+            retry, _ = self._dispatch("smart", ident.bot_guid, profile, again, set())
+        except (Limited, upstream.UpstreamError):
+            return answer
+        said = (retry.get("choices") or [{}])[0].get("message") or {}
+        return retry if (said.get("content") or "").strip() and not said.get("tool_calls") else answer
 
     def _keep_in_world(self, prepared, profile, ident, message, said, turn_meta=None):
         """A roleplaying bot that slipped (levels, servers, bots, the later game) says it again, once, in the world. Out of character on purpose
@@ -540,6 +567,21 @@ def _same_name(stored, seen):
     a, b = stored.lower().split(), seen.lower().split()
     n = min(len(a), len(b))
     return n > 0 and a[:n] == b[:n]
+
+
+def _call_signature(call):
+    """What a tool call does, whatever the model calls its parameters: the tool, the action, and the values handed to it. A model that
+    calls the same invite twice may write the target as `target_name` once and `name` the next, or an id as a number and then a string."""
+    function = (call or {}).get("function") or {}
+    try:
+        arguments = json.loads(function.get("arguments") or "{}")
+    except (TypeError, ValueError):
+        arguments = {}
+    if not isinstance(arguments, dict):
+        arguments = {}
+    params = arguments.get("params") if isinstance(arguments.get("params"), dict) else {k: v for k, v in arguments.items() if k != "action"}
+    values = sorted(str(value) for value in params.values() if isinstance(value, (str, int, float, bool)))
+    return function.get("name", ""), str(arguments.get("action", "")), tuple(values)
 
 
 def _tool_names(body):

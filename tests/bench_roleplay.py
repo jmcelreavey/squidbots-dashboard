@@ -118,6 +118,7 @@ def main():
     parser.add_argument("--reps", type=int, default=1)
     parser.add_argument("--workers", type=int, default=6)
     parser.add_argument("--base-url", default=BASE, help="an OpenAI-compatible endpoint for the models under test, such as a local Ollama (http://127.0.0.1:11434/v1); the judge always uses OpenAI")
+    parser.add_argument("--local-effort", default=None, help="reasoning_effort to send to local models; \"none\" stops a thinking model (Qwen3.5) writing its reasoning before the line")
     args = parser.parse_args()
     secret = key()
     jury = effort_for(args.judge, secret)
@@ -126,7 +127,7 @@ def main():
     rows = []
     for model in args.models.split(","):
         local = args.base_url != BASE
-        effort = None if local else effort_for(model, secret)
+        effort = args.local_effort if local else effort_for(model, secret)
         if local:       # the first request loads the model into memory: not part of the timing
             one(model, effort, "", cases[0], args.base_url)
         with concurrent.futures.ThreadPoolExecutor(args.workers) as pool:

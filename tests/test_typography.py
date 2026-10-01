@@ -13,6 +13,11 @@ class TypographyTests(unittest.TestCase):
     def test_a_dash_before_punctuation_does_not_leave_a_stray_comma(self):
         self.assertEqual(filters.clean("ok \u2014."), "ok.")
 
+    def test_a_labelled_stage_direction_loses_its_label(self):
+        self.assertEqual(filters.clean("*action: bows slightly* Elune watch over you."), "*bows slightly* Elune watch over you.")
+        self.assertEqual(filters.clean("*Emote : nods* Well met."), "*nods* Well met.")
+        self.assertEqual(filters.clean("*bows* Take action: now."), "*bows* Take action: now.")
+
     def test_plain_hyphens_are_left_alone(self):
         self.assertEqual(filters.clean("half-price, 5-10 gold"), "half-price, 5-10 gold")
 

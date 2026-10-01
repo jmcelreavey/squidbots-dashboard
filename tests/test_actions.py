@@ -106,6 +106,55 @@ class ToolRoundLimitTests(GatewayCase):
         self.assertIn("tools", self.provider.requests[-1]["body"])
 
 
+def call_answer(name, arguments):
+    """What a model answers when it wants a tool run."""
+    return {"id": "x", "choices": [{"index": 0, "finish_reason": "tool_calls", "message": {"role": "assistant", "content": None, "tool_calls": [
+        {"id": "c2", "type": "function", "function": {"name": name, "arguments": json.dumps(arguments)}}]}}],
+        "usage": {"prompt_tokens": 100, "completion_tokens": 10}}
+
+
+class RepeatedCallTests(GatewayCase):
+    """A small model answers a tool that worked by calling it again; the player should be told it worked, and the module should not run it twice."""
+
+    def invited(self):
+        request = tool_round(chat(20014, "Brick", 77, "Ann", "invite me please"), "c1", "social",
+                             {"action": "bot_invite_to_group", "params": {"target_guid": "1114", "target_name": "Ann"}}, {"ok": True})
+        request["tools"] = [{"type": "function", "function": {"name": "social", "parameters": {"type": "object"}}}]
+        return request
+
+    def test_the_same_call_again_becomes_words(self):
+        # The second call names the target differently, as models do: it is still the same invite.
+        self.provider.answers += [call_answer("social", {"action": "bot_invite_to_group", "params": {"name": "Ann", "target_guid": 1114}}), "Invite sent, come along."]
+        status, answer = self.gateway.handle("smart", self.invited())
+        self.assertEqual(status, 200)
+        message = answer["choices"][0]["message"]
+        self.assertEqual(message["content"], "Invite sent, come along.")
+        self.assertFalse(message.get("tool_calls"))
+        self.assertNotIn("tools", self.provider.requests[-1]["body"])
+        self.assertEqual(self.gateway.repeated_calls, 1)
+
+    def test_a_different_call_in_the_same_turn_is_let_through(self):
+        self.provider.answers += [call_answer("social", {"action": "bot_invite_to_group", "params": {"target_guid": "2222", "target_name": "Bob"}})]
+        status, answer = self.gateway.handle("smart", self.invited())
+        self.assertEqual(status, 200)
+        self.assertTrue(answer["choices"][0]["message"].get("tool_calls"))
+        self.assertEqual(self.gateway.repeated_calls, 0)
+
+    def test_the_first_call_of_a_turn_is_never_a_repeat(self):
+        request = chat(20014, "Brick", 77, "Ann", "invite me please")
+        request["tools"] = [{"type": "function", "function": {"name": "social", "parameters": {"type": "object"}}}]
+        self.provider.answers += [call_answer("social", {"action": "bot_invite_to_group", "params": {"target_guid": "1114"}})]
+        status, answer = self.gateway.handle("smart", request)
+        self.assertTrue(answer["choices"][0]["message"].get("tool_calls"))
+        self.assertEqual(self.gateway.repeated_calls, 0)
+
+    def test_if_the_retry_says_nothing_the_first_answer_stands(self):
+        self.provider.answers += [call_answer("social", {"action": "bot_invite_to_group", "params": {"target_guid": "1114", "target_name": "Ann"}}), ""]
+        status, answer = self.gateway.handle("smart", self.invited())
+        self.assertEqual(status, 200)
+        self.assertTrue(answer["choices"][0]["message"].get("tool_calls"))
+
+
 class PlainChatTests(GatewayCase):
     """A message that asks nothing of the bot is answered without the tools' schemas (most of the prompt)."""
 

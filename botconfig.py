@@ -43,6 +43,12 @@ SETTINGS = [Setting(*row) for row in (
      "The server never runs more random bots than this. More bots means more server load."),
     ("AiPlayerbot.BotActiveAlone", PLAYERBOTS, "Population", "Bots awake with no player near (%)", "int", None, "restart",
      "Share of bots that keep playing when no real player is around. 100 keeps them all active, at the cost of server load. 60 is what a 1000-bot realm was measured to need."),
+    ("AiPlayerbot.DisabledWithoutRealPlayer", PLAYERBOTS, "Population", "Bots rest when nobody is online", "bool", None, "restart",
+     "Random bots log in a little after the first real player does, and log out once every real player has gone. Off keeps the whole population running, and talking, around the clock."),
+    ("AiPlayerbot.DisabledWithoutRealPlayerLoginDelay", PLAYERBOTS, "Population", "Seconds before bots log in after a player", "int", None, "restart",
+     "Only with bots resting when nobody is online. The wait between the first player arriving and the bots starting to log in."),
+    ("AiPlayerbot.DisabledWithoutRealPlayerLogoutDelay", PLAYERBOTS, "Population", "Seconds before bots log out after the last player", "int", None, "restart",
+     "Only with bots resting when nobody is online. A short gap so a quick relog does not make every bot log out and back in."),
 
     ("AiPlayerbot.RandomBotMinLevel", PLAYERBOTS, "Levels", "Lowest level a bot is given", "int", None, "new bots",
      "The bottom of the range new bots are rolled into."),

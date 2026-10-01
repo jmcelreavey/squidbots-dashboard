@@ -147,15 +147,25 @@ Tried on the test machine (RTX 3070 8 GB, Ollama 0.35 installed in a user folder
 
 | model | score /8 | median | p90 | note |
 |---|---|---|---|---|
-| llama3.2:3b | 7.4 | 0.31 s | 0.53 s | 2 GB |
+| llama3.2:3b | 7.3 to 7.4 | 0.28 to 0.31 s | 0.53 to 0.64 s | 2 GB |
 | qwen2.5:7b-instruct | 7.2 | 0.46 s | 0.85 s | 4.7 GB |
+| qwen3.5:4b (thinking off) | 7.4 | 0.83 s | 2.4 s | 3.4 GB |
+| gemma3:4b | 7.5 | 0.83 s | 3.1 s | 3.3 GB, 7 slips of 48 |
 | gpt-5.4-nano (API, for comparison) | 7.75 | 0.87 s | 1.04 s | |
 
 One request at a time a local 3B or 7B is two to three times quicker than the API and free, at a small cost in quality (about 0.4 on the judge's scale). With
 four requests at once they queue on the one GPU (median 1.3 s and 1.7 s), which is no better than the API, so it suits a realm where lines arrive a few seconds
 apart. The mind service speaks to any OpenAI-compatible endpoint, so a local model is a profile with base URL `http://127.0.0.1:11434/v1`
 and a model name, assigned to the Ambient lane (not Conversation, which needs dependable tool calls). `python tests/bench_roleplay.py --models
-llama3.2:3b --base-url http://127.0.0.1:11434/v1` measures a model of your own.
+llama3.2:3b --base-url http://127.0.0.1:11434/v1 --workers 1` measures a model of your own (add `--local-effort none` for a thinking model such as
+Qwen3.5, or it writes its reasoning first). The two 4B models score the same as llama within the judge's noise and take three times as long with a long tail,
+so llama3.2:3b is what the test realm's Ambient lane runs on (live: about 0.45 s a line, against 0.9 to 1.6 s on the API). If Ollama is down the profile falls
+back to the API.
+
+**Keep Jev hosted for now.** Ollama 0.35 serves TypeSafe's own wire format at `/v1/systemone`, so a local decision model is a URL swap. On 16 hand-labelled
+picker cases hosted Jev got 16, `tev1:4b` (Together AI, 4.5 GB) 15 at the same ~0.3 s, and `tev1:0.8b` only 6 (it says "none fits" too often). But on an
+8 GB card `tev1:4b` and llama3.2:3b do not stay loaded together: alternating them reloads a model on every call (4 to 8 s each), which throws away the speed the
+local chat model was for.
 
 ## The roleplay line bank
 

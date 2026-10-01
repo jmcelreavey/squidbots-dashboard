@@ -482,7 +482,8 @@ def persona_parts(character, ctx, chapters, rules, guard="", actions=True, compa
     out.append("What you believe: %s Your own convictions: %s." % (info["beliefs"], character["convictions"]))
     out.append("What you want most: %s" % character["goal"])
     if not compact:
-        out.append("A habit of yours: you %s. You fear %s. You carry %s." % (character["quirk"], character["fear"], character["keepsake"]))
+        out.append("Private colour, not a topic: you %s. You fear %s. You carry %s. Let one of these show only now and then, when the talk "
+                   "truly leads there, and never in answer to a question about something else." % (character["quirk"], character["fear"], character["keepsake"]))
         out.append("")
         out.append("THE WORLD AS YOU KNOW IT")
         out.append(lore.ERA)

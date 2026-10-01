@@ -8,6 +8,8 @@ import re
 # What a chat client cannot draw: bold and strikethrough, inline code, headings and bullets. A single *action*
 # is how players roleplay in chat and stays; so does snake_case.
 MARKDOWN = [
+    # Small models label their stage direction: "*action: bows*". Players write "*bows*".
+    (re.compile(r"\*\s*(?:actions?|emotes?)\s*:\s*", re.I), "*"),
     (re.compile(r"\*\*(.+?)\*\*"), r"\1"),
     (re.compile(r"(?<!\w)__(.+?)__(?!\w)"), r"\1"),
     (re.compile(r"~~(.+?)~~"), r"\1"),
