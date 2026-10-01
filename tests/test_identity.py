@@ -25,6 +25,20 @@ class IdentityTests(unittest.TestCase):
         who = identity.identify(body)
         self.assertEqual((who.bot_guid, who.bot_name, who.player_guid, who.player_name), (19, "Zuwe Bot", 1114, "Mindprobe"))
 
+    def test_plain_headers_name_the_bot_and_player_for_any_module(self):
+        body = {"messages": [{"role": "system", "content": "You are a bot."}, {"role": "user", "content": "hi"}]}
+        who = identity.identify(body, {"X-Mind-Bot-Guid": "812", "X-Mind-Bot-Name": "Elorin Moonwhisper", "x-mind-player-guid": "55",
+                                       "x-mind-player-name": "Kove"})
+        self.assertEqual((who.bot_guid, who.bot_name, who.player_guid, who.player_name), (812, "Elorin Moonwhisper", 55, "Kove"))
+
+    def test_the_headers_win_over_a_prompt_that_names_someone_else(self):
+        who = identity.identify(chat(20014, "Brick", 77, "Ann", "hi"), {"x-mind-bot-guid": "9", "x-mind-bot-name": "Other"})
+        self.assertEqual((who.bot_guid, who.bot_name), (9, "Other"))
+
+    def test_a_header_that_is_not_a_number_is_ignored(self):
+        who = identity.identify(chat(20014, "Brick", 77, "Ann", "hi"), {"x-mind-bot-guid": "twelve"})
+        self.assertEqual(who.bot_guid, 20014)
+
     def test_a_missing_name_still_gives_the_guid(self):
         body = {"user": "wow-bot-19", "messages": [{"role": "system", "content": "- botGuid = 19  (you)\n- playerGuid = 5  (them)\n"}]}
         who = identity.identify(body)

@@ -5,7 +5,8 @@ can say which of twelve prewritten lines fits the conversation best, and whether
 what the line bank needs to feel like a conversation rather than lines said at random.
 
 The key is read from the environment (JEV_API_KEY, or a file named by JEV_KEY_FILE), never stored in the database or in
-a config file. A failing service opens a short breaker so a slow Jev never slows chat: the caller falls back to the local
+a config file. JEV_URL (and JEV_MODEL) point it somewhere else: anything that speaks the same `/v1/systemone` request, such as the
+`tev1` and `nimble` decision models in Ollama 0.35, needs no key and costs nothing. A failing service opens a short breaker so a slow Jev never slows chat: the caller falls back to the local
 picker.
 """
 import json
@@ -17,6 +18,7 @@ import urllib.request
 
 ENDPOINT = "https://api.typesafe.ai/v1/systemone"
 MODEL = "jev-1.13.0"
+LOCAL_URL_ENV, LOCAL_MODEL_ENV = "JEV_URL", "JEV_MODEL"
 TIMEOUT_S = 4.0
 BREAKER_FAILURES = 3
 BREAKER_PAUSE_S = 60.0
@@ -25,6 +27,23 @@ PRICE_PER_M_INPUT = 0.042      # TypeSafe's list price; output is free
 
 class JevError(Exception):
     pass
+
+
+def endpoint():
+    return os.environ.get(LOCAL_URL_ENV, "").strip() or ENDPOINT
+
+
+def model_name():
+    return os.environ.get(LOCAL_MODEL_ENV, "").strip() or MODEL
+
+
+def self_hosted():
+    """A Jev-compatible service of your own (JEV_URL set): no key to send, no price to pay."""
+    return bool(os.environ.get(LOCAL_URL_ENV, "").strip())
+
+
+def price_per_m_input():
+    return 0.0 if self_hosted() else PRICE_PER_M_INPUT
 
 
 def api_key():
@@ -65,19 +84,19 @@ STATS = {"calls": 0, "failures": 0, "input_tokens": 0}
 
 
 def available():
-    return bool(api_key()) and BREAKER.allow()
+    return (bool(api_key()) or self_hosted()) and BREAKER.allow()
 
 
-def decide(state, questions, model=MODEL, endpoint=ENDPOINT, timeout=TIMEOUT_S):
+def decide(state, questions, model=None, url=None, timeout=TIMEOUT_S):
     """{question name: answer} for the questions. Raises JevError; the caller falls back."""
     key = api_key()
-    if not key:
+    if not key and not self_hosted():
         raise JevError("no Jev key in the environment")
     if not BREAKER.allow():
         raise JevError("Jev is paused after repeated failures")
-    body = json.dumps({"model": model, "state": state, "questions": questions}).encode("utf-8")
-    request = urllib.request.Request(endpoint, data=body, headers={
-        "Content-Type": "application/json", "Authorization": "Bearer " + key})
+    body = json.dumps({"model": model or model_name(), "state": state, "questions": questions}).encode("utf-8")
+    request = urllib.request.Request(url or endpoint(), data=body, headers=dict(
+        {"Content-Type": "application/json"}, **({"Authorization": "Bearer " + key} if key else {})))
     STATS["calls"] += 1
     try:
         with urllib.request.urlopen(request, timeout=timeout) as response:
@@ -117,4 +136,4 @@ def top_choice(answer, valid):
 
 
 def spent_usd():
-    return STATS["input_tokens"] * PRICE_PER_M_INPUT / 1e6
+    return STATS["input_tokens"] * price_per_m_input() / 1e6

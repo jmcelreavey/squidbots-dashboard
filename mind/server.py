@@ -148,7 +148,7 @@ def heartbeat_loop(settings, gateway, started):
                 "schema": 1, "at": time.time(), "started": started, "pid": os.getpid(),
                 "port": settings["port"], "inflight": gateway.inflight, "keys": gateway.key_states(),
                 "noPlayer": gateway.no_player, "plainChats": gateway.plain_chats, "roleplayRetries": gateway.rp_retries, "repeatedCalls": gateway.repeated_calls,
-                "jev": {"key": bool(jev.api_key()), "calls": jev.STATS["calls"], "failures": jev.STATS["failures"],
+                "jev": {"key": bool(jev.api_key()) or jev.self_hosted(), "calls": jev.STATS["calls"], "failures": jev.STATS["failures"],
                         "spentUsd": jev.spent_usd(), "paused": not jev.BREAKER.allow()}}))
             gateway.store.prune_call_log()
         except OSError as error:

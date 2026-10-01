@@ -124,6 +124,8 @@ class Gateway:
 
         # The dashboard's Test button names a profile outright, so that it tries exactly what the service would.
         name = headers.get(PROFILE_HEADER) or self.store.profile_for(lane, ident.bot_guid)
+        if lane == "smart" and ident.bot_guid and not playground and not prepared.get("tools") and self.store.setting("plain_chat_on_ambient") == "1":
+            name = self.store.profile_for("ambient", ident.bot_guid) or name      # words only: a model that cannot handle tools can still say them
         if not name:
             return 503, error_answer("no LLM profile is assigned to the %s lane; set one on the Minds page" % lane,
                                      "not_configured")
@@ -164,6 +166,7 @@ class Gateway:
             message["content"] = cleaned
             if persona and persona.get("rp"):
                 self._keep_in_world(prepared, name, ident, message, said, turn_meta=meta)
+                message["content"] = rp_bank_module.accent(persona.get("race"), message["content"])
         tools = ",".join((call.get("function") or {}).get("name", "") for call in message.get("tool_calls") or [])
         self._log_turn(turn, dict(meta, reply=(message.get("content") or "")[:2000], tool_calls=tools, ok=1), force=conversation)
 

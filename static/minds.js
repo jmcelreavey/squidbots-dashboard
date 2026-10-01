@@ -39,6 +39,7 @@
     ["Chat and personalities", [
       ["personality_mix", "How common each kind of personality is", "For personalities made automatically, like troll: 3, lurker: 1. A bigger number is more common, 0 removes a kind, a kind left out is never made. Empty uses the built-in mix. Apply it with Re-roll all generated personalities below.", "text"],
       ["plain_chat_no_tools", "Plain conversation without tools", "A whisper that asks nothing of the bot (no invite, follow, trade or the like) is answered without the tool list, which is most of the prompt: quicker and cheaper. Anything that could be a request keeps them.", "bool"],
+      ["plain_chat_on_ambient", "Plain conversation on the ambient model", "A conversation turn that needs no tools (plain talk, or the words after a tool has run) is written by the Ambient lane's model instead of the Conversation lane's. Lets a small local model carry the chat while the model that handles tools does only that.", "bool"],
       ["max_tool_rounds", "Most tool steps per message", "Stops a bot that keeps calling tools without ever answering. The game module has its own, higher limit.", "int"],
       ["ambient_vibe", "The vibe of public chat", "Told to every bot that answers a hello or says its stock chatter in its own words. Make it politer, ruder, sillier or more roleplay. Empty uses the built-in text (shown in grey).", "text"],
     ]],

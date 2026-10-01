@@ -17,6 +17,9 @@ SESSION_KEY = re.compile(r"(\d+)-(\d+)$")
 SNAPSHOT_BOT = re.compile(r'"?bot_?[gG]uid"?\s*[:=]\s*"?(\d+)')
 
 SESSION_HEADER = "x-synthiq-session-key"
+# What a module that is not mod-ollama-chat sends instead: plain headers, no prompt format to imitate (see docs/protocol.md).
+BOT_GUID_HEADER, BOT_NAME_HEADER = "x-mind-bot-guid", "x-mind-bot-name"
+PLAYER_GUID_HEADER, PLAYER_NAME_HEADER = "x-mind-player-guid", "x-mind-player-name"
 
 
 class Identity:
@@ -64,6 +67,15 @@ def identify(body, headers=None, lane="smart"):
         ident.player_guid, ident.player_name = int(found.group(1)), found.group(2) or ""
     elif session and int(session.group(1)) == ident.bot_guid:
         ident.player_guid = int(session.group(2))
+
+    # The explicit headers win: they are the contract, the prompt scraping above is for the module that came first.
+    given = {key.lower(): value for key, value in (headers or {}).items()}
+    if str(given.get(BOT_GUID_HEADER, "")).isdigit():
+        ident.bot_guid = int(given[BOT_GUID_HEADER])
+        ident.bot_name = str(given.get(BOT_NAME_HEADER) or ident.bot_name)[:40]
+    if str(given.get(PLAYER_GUID_HEADER, "")).isdigit():
+        ident.player_guid = int(given[PLAYER_GUID_HEADER])
+        ident.player_name = str(given.get(PLAYER_NAME_HEADER) or ident.player_name)[:40]
 
     if not ident.bot_guid and lane == "fast":
         every = "\n".join(_text(m.get("content")) for m in messages if isinstance(m, dict))

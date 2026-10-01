@@ -1,7 +1,7 @@
 import json
 import unittest
 
-from tests.support import GatewayCase, chat
+from tests.support import GatewayCase, chat, profile_fields
 
 
 def tool_round(request, call_id, name, arguments, result):
@@ -153,6 +153,37 @@ class RepeatedCallTests(GatewayCase):
         status, answer = self.gateway.handle("smart", self.invited())
         self.assertEqual(status, 200)
         self.assertTrue(answer["choices"][0]["message"].get("tool_calls"))
+
+
+class PlainChatLaneTests(GatewayCase):
+    """With plain_chat_on_ambient, a turn that offers no tools is written by the ambient lane's model."""
+
+    def setUp(self):
+        super().setUp()
+        self.store.save_profile("small", dict(profile_fields(self.provider.url), model="small-model"))
+        self.store.set_lane("ambient", "small")
+        self.store.set_setting("plain_chat_on_ambient", "1")
+
+    def sent_model(self, request):
+        self.provider.answers.append("ok")
+        self.gateway.handle("smart", request)
+        return self.provider.requests[-1]["body"]["model"]
+
+    def test_small_talk_goes_to_the_ambient_model(self):
+        request = chat(20014, "Brick", 77, "Ann", "who are you?")
+        request["tools"] = [{"type": "function", "function": {"name": "core", "parameters": {"type": "object"}}}]
+        self.assertEqual(self.sent_model(request), "small-model")
+
+    def test_a_turn_that_may_need_a_tool_stays_on_the_conversation_model(self):
+        request = chat(20014, "Brick", 77, "Ann", "invite me please")
+        request["tools"] = [{"type": "function", "function": {"name": "core", "parameters": {"type": "object"}}}]
+        self.assertNotEqual(self.sent_model(request), "small-model")
+
+    def test_it_is_off_unless_asked_for(self):
+        self.store.set_setting("plain_chat_on_ambient", "0")
+        request = chat(20014, "Brick", 77, "Ann", "who are you?")
+        request["tools"] = [{"type": "function", "function": {"name": "core", "parameters": {"type": "object"}}}]
+        self.assertNotEqual(self.sent_model(request), "small-model")
 
 
 class PlainChatTests(GatewayCase):
