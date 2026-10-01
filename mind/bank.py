@@ -331,8 +331,9 @@ class Bank:
             for situation in situations:
                 rows = db.execute("SELECT id, text, situation, uses FROM bank WHERE archetype = ? AND situation = ? "
                                   "ORDER BY uses ASC, RANDOM() LIMIT 200", (archetype, situation)).fetchall()
+                faith = "faith" in situation or "prayer" in situation       # a line about faith may bless; a greeting or a farewell may not
                 pool = [r for r in rows if r["id"] not in said and r["text"].strip().lower() not in avoid_texts
-                        and r["id"] not in seen]
+                        and r["id"] not in seen and (faith or not archetype.startswith("rp") or not rp_bank.SERMON.search(r["text"]))]
                 # the least-used tier, shuffled, so that two bots with the same persona do not say the same thing
                 rng_shuffle(pool, rng)
                 for row in pool[:max(limit - len(chosen), 0)]:
@@ -483,7 +484,8 @@ def parse_lines(text, situation):
         if re.search(r"\b(as an ai|language model|i am a bot|i'm a bot)\b", line, re.I):
             continue
         if roleplay and (rp_bank.META.search(PLACEHOLDER.sub("", line)) or "level" in PLACEHOLDER.findall(line)
-                         or rp_bank.SELF_GENDERED.search(line) or rp_bank.ANACHRONISM.search(line)):
+                         or rp_bank.SELF_GENDERED.search(line) or rp_bank.ANACHRONISM.search(line)
+                         or ("faith" not in situation and "prayer" not in situation and rp_bank.SERMON.search(line))):
             continue      # a person in the world does not talk about levels, servers or bots, and any gender may say the line
         found = PLACEHOLDER.findall(line)
         if "link" not in found and OBJECTIVE.search(line):

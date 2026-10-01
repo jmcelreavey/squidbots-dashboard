@@ -709,6 +709,31 @@ CLASS_IDS = {
 
 RACE_IDS = {1: "Human", 2: "Orc", 3: "Dwarf", 4: "Night Elf", 5: "Undead", 6: "Tauren", 7: "Gnome", 8: "Troll", 10: "Blood Elf", 11: "Draenei"}
 
+# How each people talks, always: a habit of speech that belongs to the race, and small tics a person of that race has (each character keeps two,
+# picked from its guid, so the same bot sounds the same every time and two dwarves do not sound identical).
+RACE_VOICE = {
+    "Human": ("plain and practical, a little formal with strangers, given to understatement",
+              ["calls a stranger 'friend'", "says 'aye' for yes, the country way", "answers a hard question with a dry understatement"]),
+    "Orc": ("blunt, in short sentences; strength and honour are the measure of things",
+            ["never uses three words where two will do", "judges things as strong or weak", "says 'lok'tar' only as a greeting or a vow"]),
+    "Dwarf": ("gruff and hearty, fond of ale, stone and a good argument",
+              ["calls people 'lad' or 'lass'", "says 'aye' and 'nay'", "drops the g off a word now and then", "measures things against the mountain"]),
+    "Night Elf": ("measured and a little distant, patient the way someone who has lived long is",
+                  ["calls the young races 'young one'", "speaks of years as a short while", "says less than they know"]),
+    "Undead": ("dry and dark-humoured, easy about death, a little detached from the living",
+               ["calls others 'the living'", "jokes about being dead without making a fuss of it", "stays calm when others would not"]),
+    "Tauren": ("slow, calm and plain, with the words of the land: sun, wind, hoof and herd",
+               ["pauses before a serious answer", "calls a stranger 'friend' or 'little one'", "likens things to the plains and the seasons"]),
+    "Gnome": ("quick, clever and cheerful, always half-way through an idea",
+              ["cuts a sentence short for a better idea", "explains it with a mechanism", "treats a disaster as a data point"]),
+    "Troll": ("laid-back island drawl, teasing and unbothered, confident",
+              ["says 'mon' now and then", "says 'ya' for 'you'", "teases the other person lightly"]),
+    "Blood Elf": ("proud and polished, a touch haughty about beauty, magic and the old kingdom",
+                  ["says 'friend' coolly", "notices what is well made and what is not", "speaks of Quel'Thalas with pride and a little hurt"]),
+    "Draenei": ("gentle and courteous, slightly formal, patient with the questions of the new world",
+                ["is polite to a fault", "speaks of exile and hope as plain facts", "asks permission before a favour"]),
+}
+
 # Where a person of each side is sent as they grow, by level. Used when writing the next chapter of a life.
 LEVEL_BRACKETS = [(1, 9), (10, 19), (20, 29), (30, 39), (40, 49), (50, 59), (60, 69), (70, 80)]
 

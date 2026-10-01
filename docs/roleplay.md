@@ -63,6 +63,27 @@ remembers you and can become a friend or a rival.
 
 Short remarks use a compact version of the prompt, so a line costs about as much as before.
 
+## How they talk: short and direct
+
+Chat is short. A bot talking among other bots, greeting someone or remarking on the road is asked for **a few words or one short sentence**
+(`RP_MAX_CHARS` 90, cut at 130). Only when a player is really talking with it (spoken to by name, or answering something the bot said a moment ago)
+does it get the conversation tier: one or two short sentences, up to 160 characters (cut at 220), still answering first and plainly. An NPC
+answering a player is in a conversation too.
+
+Guild chat had read like a sermon, with every greeting and farewell a blessing ("Elune watch over you", "by the Light", "may the ancestors guide
+you"). Four things now stop it:
+
+- **The prompt.** The reply rules say to be direct, with no blessings, prayers, speeches, riddles or scenery, and to mention the faith only when
+  the talk is about faith. The guild scene is "plain and practical, like workmates on a break" (it was "the fireside talk of your
+  guild-fellows"). A character's sayings are for one line in ten at most, never to open or close a reply, and the "lore" register no longer asks
+  for beliefs.
+- **The model's line.** A blessing at the start or end of a line is cut (`rp_bank.strip_sermon`): "Elune watch over you, traveler. What brings you
+  to Astranaar?" says "What brings you to Astranaar?". A line that is nothing else is not said. If the player's own line is about faith (prayer,
+  the Light, the gods) the blessing stays.
+- **The bank.** About 6% of the 77,000 banked lines were blessings (the prayer, faith, greeting, farewell, hail and thanks cells most of all).
+  They are no longer served outside the faith cells, and the generator drops new ones.
+- **The setting.** The default of the Chat style "rules" box says to be brief and direct (a blank box means the default).
+
 ## Where bots speak up
 
 - **Always answered, in every channel:** whispers, party chat, a player talking to a bot by name, and anything a bot is asked to do.
@@ -82,6 +103,31 @@ brought down, a rare find. It goes to the service with the bot's context, which 
 "what has happened to you lately". When a bot enters a new stretch of life the chapter it has just finished is **rewritten around what really
 happened in it** (two or more events), so the story is the bot's own and not a template. Times are in the world's terms: no numbers, no
 levels.
+
+## Gossip, the guild, the hour and the way a people talk
+
+Four things that make the same bots read as people who share a world.
+
+**Gossip.** The module notes a whitelisted player's deaths and level-ups and sends the last three with every bot's context (`rumours`: who, what,
+where, how long ago, and how near the bot is: 2 in the same guild, 1 in the same zone, 0 elsewhere). News takes time to travel: a guildmate has it after
+two minutes, someone in the zone after seven, anyone else after twenty-five, and after six hours it is no longer news. A bot hears a piece once, and passes
+news on no more than once in a quarter of an hour (`rp_rumour`). It reaches the bot's prompt as "A guildmate told you that Kove was struck down ... You were
+not there and cannot be sure: mention it as something you heard, vaguely", and far-off news drops the detail (no name for the killer). A bot that has news
+to pass on starts a remark about it more often than not (a written one, in guild or say). Only deaths and levels are news, and only about the whitelisted.
+
+**The guild.** The module sends each bot's guild and rank (`guild`, `guild_rank`; rank 0 leads it, rank 1 are its officers). The guild's master speaks
+with quiet authority and rarely jokes, an officer is practical and a little dry, a member is easy company, and a newcomer (a rank named Initiate, or
+the lowest) asks more than they tell. The place shows in the prompt ("In your guild, The Ashen Hand, you lead the guild ...") and leans what the bot
+starts talking about (a master toward the work and plans, a member toward banter and stories).
+
+**The hour.** The module sends the hour as dawn, morning, midday, afternoon, dusk or night. Each has a line in the prompt (dusk: finishing up and thinking of
+a roof, a fire and a meal; night: off duty, at a fire or an inn, with no mind to work) and leans what a bot starts talking about: the fire, humour and stories at
+night, the work and the zone by day. It is the bots' words that follow the hour, not their feet: nothing sends them to the inn.
+
+**How a people talk.** Every race has a way of talking (a dwarf is gruff and hearty, a night elf measured and distant, a gnome cut off by a better idea) and three
+small habits, of which each character keeps two, chosen by its guid so a bot sounds the same every time. It is in the character sheet (`lore.RACE_VOICE`). A troll's
+drawl is kept by a filter on the finished line ("da", "dat", "dey", "ya"), because a small model forgets it; links, names and numbers are left alone
+(`rp_bank.accent`).
 
 ## Presence
 
@@ -147,7 +193,7 @@ Tried on the test machine (RTX 3070 8 GB, Ollama 0.35 installed in a user folder
 
 | model | score /8 | median | p90 | note |
 |---|---|---|---|---|
-| llama3.2:3b | 7.3 to 7.4 | 0.28 to 0.31 s | 0.53 to 0.64 s | 2 GB |
+| llama3.2:3b | 7.0 to 7.4 | 0.27 to 0.31 s | 0.53 to 0.64 s | 2 GB |
 | qwen2.5:7b-instruct | 7.2 | 0.46 s | 0.85 s | 4.7 GB |
 | qwen3.5:4b (thinking off) | 7.4 | 0.83 s | 2.4 s | 3.4 GB |
 | gemma3:4b | 7.5 | 0.83 s | 3.1 s | 3.3 GB, 7 slips of 48 |
@@ -158,14 +204,34 @@ four requests at once they queue on the one GPU (median 1.3 s and 1.7 s), which 
 apart. The mind service speaks to any OpenAI-compatible endpoint, so a local model is a profile with base URL `http://127.0.0.1:11434/v1`
 and a model name, assigned to the Ambient lane (not Conversation, which needs dependable tool calls). `python tests/bench_roleplay.py --models
 llama3.2:3b --base-url http://127.0.0.1:11434/v1 --workers 1` measures a model of your own (add `--local-effort none` for a thinking model such as
-Qwen3.5, or it writes its reasoning first). The two 4B models score the same as llama within the judge's noise and take three times as long with a long tail,
-so llama3.2:3b is what the test realm's Ambient lane runs on (live: about 0.45 s a line, against 0.9 to 1.6 s on the API). If Ollama is down the profile falls
-back to the API.
+Qwen3.5, or it writes its reasoning first). The two 4B models score the same as llama within the judge's noise and take three times as long with a long tail. With the short, direct prompts
+(see "How they talk") llama keeps lines shorter (median 65 characters, 5 of 48 over 130) than qwen3.5:4b (median 89, 16 of 48 over 130), which
+is the other reason llama3.2:3b runs the test realm's Ambient lane (live: about 0.45 s a line, against 0.9 to 1.6 s on the API). If Ollama is down the
+profile falls back to the API. The server runs as a systemd user unit (`coa-ollama.service`: 30 minutes keep-alive, flash attention, a q8 cache, an 8k window),
+so it is up after a restart; `./run.sh ollama start|stop|status` drives it.
+
+**Only the chat runs locally.** Putting every lane on one local model was tried and measured, and the lanes that call tools, or run all the time, do not work on
+an 8 GB card:
+
+- *Tool calls.* Replaying 33 captured conversation requests twice: gpt-6-luna 65 of 66; qwen3.5:4b 49 (it calls the invite tool again after it succeeded);
+  llama3.2:3b 44 (it never calls a tool for "invite me" or "what class are you"); qwen2.5:7b 17. On the live realm, with every lane on qwen3.5:4b, the small
+  talk scenario passed and the class-and-level, memory, invite and tool-error scenarios failed (scenery instead of a lookup, a tool error read out loud, no
+  invite). With the Conversation lane back on gpt-6-luna all of them pass.
+- *One GPU.* The tactical ticks (every few seconds near a player), the memory lane and the line bank all queue behind the chat. With them local a line said in
+  /say was answered after 34 seconds; with them back on the API, after 2.7.
+
+So the Ambient lane is local, and **Plain conversation on the ambient model** (`plain_chat_on_ambient`) sends a whisper that needs no tools, and the words
+after a tool has run, to the same local model. Conversation (tools), Quick decisions and Memory stay on gpt-6-luna, which costs about a cent an hour.
+A repeated tool call in one turn (a small model calling the invite again after it worked) is answered with words instead (`repeatedCalls` in the status file).
 
 **Keep Jev hosted for now.** Ollama 0.35 serves TypeSafe's own wire format at `/v1/systemone`, so a local decision model is a URL swap. On 16 hand-labelled
 picker cases hosted Jev got 16, `tev1:4b` (Together AI, 4.5 GB) 15 at the same ~0.3 s, and `tev1:0.8b` only 6 (it says "none fits" too often). But on an
 8 GB card `tev1:4b` and llama3.2:3b do not stay loaded together: alternating them reloads a model on every call (4 to 8 s each), which throws away the speed the
 local chat model was for.
+
+To try one anyway: the mind service reads `JEV_URL` (`http://127.0.0.1:11434/v1/systemone`) and `JEV_MODEL` (`tev1:4b`) from its environment, needs no key for
+it and counts it as free; the game module has `OllamaChat.Jev.Url` and `OllamaChat.Jev.Model` for the same thing. Both fall back as before when it fails.
+With a bigger GPU (or a second card) that keeps both models loaded, this is the cheaper setup.
 
 ## The roleplay line bank
 

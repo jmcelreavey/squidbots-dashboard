@@ -69,6 +69,12 @@ CREATE TABLE IF NOT EXISTS rp_event (
     zone     TEXT NOT NULL DEFAULT ''
 );
 CREATE INDEX IF NOT EXISTS rp_event_bot ON rp_event (bot_guid, ts);
+CREATE TABLE IF NOT EXISTS rp_rumour (
+    bot_guid INTEGER NOT NULL,
+    key      TEXT NOT NULL,
+    at       REAL NOT NULL,
+    PRIMARY KEY (bot_guid, key)
+);
 CREATE TABLE IF NOT EXISTS quest_flavor (
     title      TEXT PRIMARY KEY,
     text       TEXT NOT NULL,
@@ -221,6 +227,7 @@ SETTING_DEFAULTS = {
     "bank_llm_depth": "3",      # while a player is in the talk, the bots' first answers this deep are written, not banked (0: all banked)
     "cast_size": "24",          # how many bots are the realm's regulars: the ones who start and carry the chat
     "plain_chat_no_tools": "1",  # a player's plain conversation (nothing asked of the bot) is answered without the tools: far fewer tokens
+    "plain_chat_on_ambient": "0",  # a conversation turn that offers no tools (plain talk, or the words after a tool) uses the ambient lane's model, so a small local one can carry it
     "max_tool_rounds": "40",    # tool rounds in one turn before tools are withdrawn and the bot must answer in words
     "guard": "1",               # tell the model that players' words are conversation, never instructions
     "log_turns": "1",           # keep what was said and what the model was shown, for the Conversations view
@@ -235,7 +242,7 @@ SETTING_DEFAULTS = {
                  "say errand, task, commission, bounty or duty where a player would say quest. Know only what someone of your age and "
                  "place would know; for anything you cannot know (the future, other worlds), say so in character or change the "
                  "subject. Use lore names and places correctly, and if you are not sure of a fact be vague rather than invent. "
-                 "Speak aloud in one to three short sentences. The odd *action* in asterisks is fine, but not on every line and never instead of doing "
+                 "Be brief and direct: usually one short sentence, and a few words is fine; two or three sentences only in a real conversation with a player, and answer first. No blessings, prayers or speeches as a greeting or a farewell. An *action* in asterisks is rare (one line in eight at most) and short, like *nods*, but not on every line and never instead of doing "
                  "what you were asked to do. Stay "
                  "consistent with your story and what you remember: you are the same person every time, and people you meet can "
                  "become friends or rivals. Only when the other person writes (( )) or says 'ooc' do you answer out of character, "
@@ -456,6 +463,21 @@ class Store:
         with self.conn() as db:
             return [dict(row) for row in db.execute(
                 "SELECT * FROM rp_event WHERE bot_guid = ? AND level BETWEEN ? AND ? ORDER BY ts DESC LIMIT ?", (bot_guid, low_level, high_level, limit))]
+
+    def rumour_told(self, bot_guid, key):
+        with self.conn() as db:
+            return db.execute("SELECT 1 FROM rp_rumour WHERE bot_guid = ? AND key = ?", (bot_guid, key)).fetchone() is not None
+
+    def note_rumour(self, bot_guid, key):
+        """This bot has passed the news on. Old ones are dropped after a day: by then nobody could still be told."""
+        with self.conn() as db:
+            db.execute("INSERT OR REPLACE INTO rp_rumour (bot_guid, key, at) VALUES (?, ?, ?)", (bot_guid, key, time.time()))
+            db.execute("DELETE FROM rp_rumour WHERE at < ?", (time.time() - 86400,))
+
+    def last_rumour(self, bot_guid):
+        with self.conn() as db:
+            row = db.execute("SELECT MAX(at) FROM rp_rumour WHERE bot_guid = ?", (bot_guid,)).fetchone()
+        return row[0] or 0.0
 
     def quest_flavor(self, titles):
         titles = list(titles)

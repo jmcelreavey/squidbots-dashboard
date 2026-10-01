@@ -4,7 +4,7 @@ import re
 import time
 import unittest
 
-from mind import api as api_module, bank as bank_module, lore, lore_names, rp, rp_bank, store as store_module
+from mind import ambient as ambient_module, api as api_module, bank as bank_module, lore, lore_names, rp, rp_bank, store as store_module
 from tests.support import GatewayCase, chat, live_api
 
 CONTEXT = {"race": "Night Elf", "class": "Hunter", "gender": "female", "level": 34, "zone": "Ashenvale", "area": "Astranaar",
@@ -31,6 +31,7 @@ class RoleplayCase(GatewayCase):
         self.store.set_setting("chat_mode", "roleplay")
         self.store.set_setting("rp_ai_story", "0")      # a test that wants the story writer turns it on
         self.gateway.ambient.rng = lambda: 0.0
+        self.gateway.rp.rng = lambda: 0.0
 
 
 class LoreTests(unittest.TestCase):
@@ -463,15 +464,192 @@ class StoryTests(RoleplayCase):
         self.assertEqual(len(self.store.rp_chapters(20014)), 4)
 
 
+class SpeechHabitTests(RoleplayCase):
+    def sheet(self, race, klass, guid):
+        context = dict(CONTEXT, race=race, **{"class": klass})
+        self.gateway.rp.character(guid, "Test Person", rp.clean_context(context))
+        stable, _ = rp.persona_parts(self.store.rp_character(guid), rp.clean_context(context), [], "", compact=True)
+        return stable
+
+    def test_every_people_has_a_way_of_talking_and_two_habits_that_stay_the_same(self):
+        self.assertEqual(set(lore.RACE_VOICE), set(lore.RACES))
+        for race in lore.RACES:
+            klass = "Hunter"
+            first = self.sheet(race, klass, 31000 + len(race))
+            self.assertIn("The way your people talk, every time:", first, race)
+            self.assertEqual(first, self.sheet(race, klass, 31000 + len(race)), race)       # the same bot sounds the same
+
+    def test_two_characters_of_one_people_can_have_different_habits(self):
+        habits = {re.search(r"never forced into a line: (.+?)\.\n", self.sheet("Dwarf", "Hunter", guid)).group(1) for guid in range(40000, 40012)}
+        self.assertGreater(len(habits), 1)
+
+    def test_a_troll_has_a_drawl_that_a_filter_keeps_and_other_peoples_do_not(self):
+        self.assertEqual(rp_bank.accent("Troll", "The road is clear, and they know that you saw them."), "Da road is clear, and dey know dat ya saw dem.")
+        self.assertEqual(rp_bank.accent("Orc", "The road is clear."), "The road is clear.")
+
+    def test_the_drawl_leaves_links_names_and_numbers_alone(self):
+        link = "|cff0070dd|Hquest:123:20|h[The Elune's Tear]|h|r"
+        said = rp_bank.accent("Troll", "Thrall said that Thunder Bluff is far, take %s with you, 3 gold." % link)
+        self.assertIn(link, said)
+        self.assertTrue(said.startswith("Thrall said dat Thunder Bluff"))
+        self.assertIn("[[1]]", rp_bank.accent("Troll", "Take [[1]] with the rest."))
+
+    def test_a_troll_is_heard_with_its_drawl(self):
+        self.store.set_setting("rp_bank_share_player", "0")
+        self.provider.answers.append("The road is clear, and they know that you saw them.")
+        answer = self.gateway.ambient.handle(ambient(race="Troll", **{"class": "Hunter"}, zone="Durotar", area="Sen'jin Village"))
+        self.assertEqual(answer["text"], "Da road is clear, and dey know dat ya saw dem.")
+
+
+class HourAndGuildTests(RoleplayCase):
+    def test_the_hour_shapes_what_a_person_is_about(self):
+        night = rp.now_text({"level": 30, "zone": "Ashenvale"}, rp.clean_context(dict(CONTEXT, time="night")))
+        self.assertIn("off duty", night)
+        self.assertNotIn("it is night", night)
+        self.assertIn("working", rp.now_text({"level": 30}, rp.clean_context(dict(CONTEXT, time="midday"))))
+
+    def test_at_night_the_talk_is_of_the_fire_and_by_day_of_the_work(self):
+        topics = (("rp_idle_work", 1), ("rp_idle_camp", 1), ("rp_idle_humor", 1))
+        night = dict(rp.start_weights({"time": "night"}, topics))
+        day = dict(rp.start_weights({"time": "morning"}, topics))
+        self.assertGreater(night["rp_idle_camp"], night["rp_idle_work"])
+        self.assertGreater(day["rp_idle_work"], day["rp_idle_camp"])
+        self.assertEqual(dict(rp.start_weights({}, topics)), dict(topics))
+
+    def test_a_place_in_the_guild_is_a_manner(self):
+        def role(rank, name=""):
+            return rp.guild_role(rp.clean_context(dict(CONTEXT, guild="The Ashen Hand", guild_rank=rank, guild_rank_name=name)))
+        self.assertEqual((role(0, "Guild Master"), role(1, "Officer"), role(2, "Veteran"), role(3, "Member"), role(4, "Initiate")),
+                         ("master", "officer", "member", "member", "new"))
+        self.assertEqual(rp.guild_role(rp.clean_context(dict(CONTEXT, guild="G", guild_rank=4))), "new")     # no rank names sent: the default ranks end with Initiate
+        self.assertEqual(rp.guild_role(rp.clean_context(dict(CONTEXT, guild="G", guild_rank=3))), "member")
+        self.assertEqual(rp.guild_role(rp.clean_context(CONTEXT)), "")
+        text = rp.now_text({"level": 30}, rp.clean_context(dict(CONTEXT, guild="The Ashen Hand", guild_rank=0, guild_rank_name="Guild Master")))
+        self.assertIn("In your guild, The Ashen Hand, You lead the guild", text)
+
+    def test_a_master_leans_to_work_and_a_member_to_banter(self):
+        topics = (("rp_idle_work", 1), ("rp_idle_humor", 1))
+        master = dict(rp.start_weights({"guild": "G", "guild_rank": 0}, topics))
+        member = dict(rp.start_weights({"guild": "G", "guild_rank": 3, "guild_rank_name": "Member"}, topics))
+        self.assertGreater(master["rp_idle_work"], master["rp_idle_humor"])
+        self.assertGreater(member["rp_idle_humor"], member["rp_idle_work"])
+
+    def test_the_guild_and_rank_reach_the_reply_prompt(self):
+        self.store.set_setting("rp_bank_share_player", "0")
+        self.provider.answers.append("Aye.")
+        self.gateway.ambient.handle(ambient(channel="guild", guild="The Ashen Hand", guild_rank=1, guild_rank_name="Officer"))
+        self.assertIn("You are an officer", self.system_text(0))
+
+
+class GossipTests(RoleplayCase):
+    def rumour(self, ago=700, near=1, who="Kove Stormrage", kind="death", ident=1790000000, text="was struck down by a Defias thug and had to be raised"):
+        return {"who": who, "k": kind, "t": text, "zone": "Durotar", "ago": ago, "near": near, "id": ident}
+
+    def context(self, *items):
+        return rp.clean_context(dict(CONTEXT, rumours=list(items)))
+
+    def test_news_reaches_a_bot_after_a_delay_that_depends_on_how_near_it_is(self):
+        self.assertIsNone(self.gateway.rp.pending_rumour(20014, self.context(self.rumour(ago=60, near=2))))          # a guildmate, not yet
+        self.assertIsNotNone(self.gateway.rp.pending_rumour(20014, self.context(self.rumour(ago=130, near=2))))
+        self.assertIsNone(self.gateway.rp.pending_rumour(20014, self.context(self.rumour(ago=700, near=0))))         # a stranger far away, later
+        self.assertIsNotNone(self.gateway.rp.pending_rumour(20014, self.context(self.rumour(ago=1600, near=0))))
+        self.assertIsNone(self.gateway.rp.pending_rumour(20014, self.context(self.rumour(ago=7 * 3600, near=2))))    # old news is no news
+
+    def test_news_is_told_once_and_not_again_for_a_quarter_of_an_hour(self):
+        context = self.context(self.rumour(), self.rumour(kind="levelup", ident=1790000500, text="came into new strength"))
+        first = self.gateway.rp.rumour(20014, context, chance=1.0)
+        self.assertIn("Kove", first)
+        self.assertIn("You were not there", first)
+        self.assertEqual(self.gateway.rp.rumour(20014, context, chance=1.0), "")                    # the cooldown
+        self.store.note_rumour(20014, "x:y:1")
+        with self.store.conn() as db:
+            db.execute("UPDATE rp_rumour SET at = at - 1000")
+        second = self.gateway.rp.rumour(20014, context, chance=1.0)
+        self.assertIn("new strength", second)                                                         # the other piece, not the first again
+        with self.store.conn() as db:
+            db.execute("UPDATE rp_rumour SET at = at - 1000")
+        self.assertEqual(self.gateway.rp.rumour(20014, context, chance=1.0), "")                    # both told
+
+    def test_far_away_news_is_vague_and_a_guildmates_is_not(self):
+        far = self.gateway.rp.rumour(20014, self.context(self.rumour(ago=2000, near=0)), chance=1.0)
+        self.assertIn("secondhand", far)
+        self.assertNotIn("Defias", far)
+        self.gateway.rp.store.note_rumour(20015, "z")
+        near = self.gateway.rp.rumour(20016, self.context(self.rumour(ago=300, near=2)), chance=1.0)
+        self.assertIn("A guildmate told you", near)
+        self.assertIn("Defias", near)
+
+    def test_the_news_is_in_the_prompt_the_bot_speaks_from(self):
+        self.store.set_setting("rp_bank_share_player", "0")
+        self.provider.answers.append("Heard Kove took a fall, poor lad.")
+        self.gateway.ambient.handle(ambient(rumours=[self.rumour(ago=300, near=2)]))
+        self.assertIn("A guildmate told you that Kove", self.system_text(0))
+
+    def test_a_bot_with_news_speaks_up_about_it(self):
+        self.store.set_setting("rp_start_llm", "0")
+        self.provider.answers.append("Did you hear about Kove? Took a fall, they say.")
+        answer = self.gateway.ambient.handle({"mode": "start", "bot_guid": 20014, "bot_name": "Alte Bot", "channel": "guild",
+                                              **dict(CONTEXT, rumours=[self.rumour(ago=300, near=2)])})
+        self.assertEqual(answer["source"], "written")
+        self.assertIn("A guildmate told you", self.system_text(0))
+
+    def test_a_malformed_rumour_is_dropped(self):
+        ctx = rp.clean_context(dict(CONTEXT, rumours=[{"who": "", "t": "x"}, {"who": "A", "t": "b", "ago": "soon"}, "junk", self.rumour()]))
+        self.assertEqual(len(ctx["rumours"]), 1)
+
+
 class AmbientRoleplayTests(RoleplayCase):
     def user_text(self, index=-1):
         return self.provider.requests[index]["body"]["messages"][1]["content"]
 
+    def test_banked_blessings_are_served_only_where_the_talk_is_about_faith(self):
+        bank = self.gateway.bank
+        bank.add_lines("rp:Night Elf:ranger", "rp_reply_greeting", ["Well met.", "Elune watch over you.", "By the Light, hello."])
+        bank.add_lines("rp:Night Elf:ranger", "rp_reply_topic:faith", ["Elune watch over you."])
+        greetings = [row["text"] for row in bank.candidates("rp:Night Elf:ranger", ["rp_reply_greeting"], 1, limit=10)]
+        self.assertEqual(greetings, ["Well met."])
+        faith = [row["text"] for row in bank.candidates("rp:Night Elf:ranger", ["rp_reply_topic:faith"], 1, limit=10)]
+        self.assertEqual(faith, ["Elune watch over you."])
+
+    def test_a_blessing_is_stripped_and_the_answer_stays(self):
+        self.store.set_setting("rp_bank_share_player", "0")
+        self.provider.answers.append("Elune watch over you, traveler. The road to Astranaar is clear.")
+        self.assertEqual(self.gateway.ambient.handle(ambient())["text"], "The road to Astranaar is clear.")
+
+    def test_a_line_that_is_only_a_blessing_is_not_said(self):
+        self.store.set_setting("rp_bank_share_player", "0")
+        self.provider.answers.append("May the ancestors guide your steps.")
+        self.assertEqual(self.gateway.ambient.handle(ambient())["text"], "")
+
+    def test_talk_of_faith_keeps_the_blessing(self):
+        self.store.set_setting("rp_bank_share_player", "0")
+        self.provider.answers.append("Elune watch over you too.")
+        self.assertEqual(self.gateway.ambient.handle(ambient(message="Do you pray to Elune?"))["text"], "Elune watch over you too.")
+
+    def test_chat_is_asked_for_a_few_words_and_a_conversation_for_a_little_more(self):
+        self.store.set_setting("rp_bank_share_player", "0")
+        self.provider.answers += ["Aye.", "Aye, I know it well."]
+        self.gateway.ambient.handle(ambient(message="the weather is nice"))
+        brief = self.system_text(0)
+        self.gateway.ambient.handle(ambient(message="the weather is nice", addressed=True))
+        talk = self.system_text(1)
+        self.assertIn("at most %d characters" % ambient_module.RP_MAX_CHARS, brief)
+        self.assertIn("ONE short thing", brief)
+        self.assertIn("A real conversation", talk)
+        self.assertIn("at most %d characters" % ambient_module.RP_TALK_MAX_CHARS, talk)
+        self.assertIn("never 'Elune watch over you'", brief)
+
+    def test_bots_among_themselves_never_get_the_conversation_tier(self):
+        self.store.set_setting("rp_bank_share_bots", "0")
+        self.provider.answers.append("Aye.")
+        self.gateway.ambient.handle(ambient(speaker_is_bot=True, speaker_guid=20015, speaker_name="Other Bot", addressed=True))
+        self.assertIn("ONE short thing", self.system_text(0))
+
     def test_a_line_said_nearby_is_answered_in_character_with_the_scene(self):
         self.store.set_setting("rp_bank_share_player", "0")
-        self.provider.answers.append("*inclines her head* Elune light your path, friend.")
+        self.provider.answers.append("*inclines her head* Well met, friend. The road to Astranaar is clear.")
         answer = self.gateway.ambient.handle(ambient())
-        self.assertIn("Elune", answer["text"])
+        self.assertIn("Astranaar", answer["text"])
         system = self.system_text(0)
         self.assertIn("Night Elf", system)
         self.assertIn("Ashenvale", system)
@@ -600,9 +778,9 @@ class PresenceTests(RoleplayCase):
 
     def test_an_emote_is_answered_with_a_line_from_the_bank_and_costs_nothing(self):
         character = self.make_bot()
-        self.gateway.bank.add_lines(character["archetype"], "rp_reply_greeting", ["Well met, {player}. Elune light your road."])
+        self.gateway.bank.add_lines(character["archetype"], "rp_reply_greeting", ["Well met, {player}. Good to see you."])
         answer = self.gateway.ambient.handle({"mode": "emote", "emote": "bow", "player_name": "Ann", "bot_guid": 20014, "bot_name": "Alte Bot", **CONTEXT})
-        self.assertEqual(answer["text"], "Well met, Ann. Elune light your road.")
+        self.assertEqual(answer["text"], "Well met, Ann. Good to see you.")
         self.assertEqual(self.provider.requests, [])
         self.assertEqual(self.gateway.ambient.handle({"mode": "emote", "emote": "dance", "bot_guid": 20014})["text"], "")
 
@@ -748,9 +926,9 @@ class BankJobTests(RoleplayCase):
                                       topics=["war", "faith"], mode="roleplay")
         self.assertEqual(again["total"], 0)                                  # nothing is missing, so a second run writes nothing
         self.assertEqual(stats["total"], 0)                                  # the player bank is untouched
-        self.assertEqual(stats["roleplay"]["total"], 9)
-        self.assertEqual(stats["roleplay"]["by_race"], {"Orc": 9})
-        self.assertEqual(sorted(bank.samples("rp:Orc:warsong-grunt", "rp_idle_topic:war", 5)), ["Elune keep you.", "The road is long.", "Well met, friend."])
+        self.assertEqual(stats["roleplay"]["total"], 7)                      # "Elune keep you." is only kept where the talk is about faith
+        self.assertEqual(stats["roleplay"]["by_race"], {"Orc": 7})
+        self.assertEqual(sorted(bank.samples("rp:Orc:warsong-grunt", "rp_idle_topic:war", 5)), ["The road is long.", "Well met, friend."])
 
 
 class ApiTests(RoleplayCase):

@@ -97,6 +97,57 @@ META = re.compile(r"\b(levels?|level-up|xp|servers?|mmo|npcs?|dungeon finder|dps
 ANACHRONISM = re.compile(r"\b(pandaria|pandaren|garrosh|cataclysm|shadowlands|maldraxxus|revendreth|ardenweald|boralus|azerite|dracthyr|evokers?|"
                          r"dragon isles|nazjatar|zuldazar|warlords of draenor|mists of pandaria|battle for azeroth|dragonflight expansion)\b", re.I)
 
+# A blessing or an invocation where a plain answer was wanted: "Elune watch over you", "By the Light", "may the ancestors guide you". The
+# models that write these people reach for them in every greeting and farewell, and a guild chat full of them reads as a sermon.
+POWERS = r"(?:the\s+)?(?:Holy\s+Light|Light|Naaru|Elune|Earthmother|ancestors|spirits|loa|Dark\s+Lady|Sunwell|Lady\s+of\s+the\s+Moon)"
+SERMON = re.compile(r"\b(?:may|by|in)\s+" + POWERS + r"\b"
+                    r"|\b" + POWERS + r"(?:'s)?\s+(?:be\s+with|watch(?:es)?(?:\s+over)?|guides?|bless(?:es)?|keeps?|protects?|shelters?|grants?|smiles?|shines?\s+on|"
+                    r"light(?:s)?\s+your|walks?\s+with|go(?:es)?\s+with|wards?|favou?r)\b"
+                    r"|\bbless(?:ings)?\s+(?:upon|on|of)\s+you\b|\bpray(?:s|ing)?\s+for\s+you\b", re.I)
+# What a player says when the talk really is about faith: then a word of it is on topic.
+FAITH_TALK = re.compile(r"\b(pray\w*|faith|priest\w*|church|temple|gods?|holy|blessing|bless\w*|light|elune|naaru|spirits?|ancestors?|loa|shaman\w*|worship\w*)\b", re.I)
+SENTENCES = re.compile(r"(?<=[.!?])\s+")
+OATH = re.compile(r"^(?:by|in)\s+" + POWERS + r"(?:'s\s+name)?[,!:]?\s+", re.I)       # "By the Light, that is a fair price": the rest is the answer
+STAGE_DIRECTION = re.compile(r"^(\*[^*]{1,120}\*\s*)")
+
+
+def strip_sermon(text, heard=""):
+    """The line without a blessing at its start or end: "Elune watch over you, traveler. What brings you to Astranaar." says what
+    brings you to Astranaar. A line that is nothing else comes back empty, and the talk being about faith keeps everything."""
+    if not text or not SERMON.search(text) or FAITH_TALK.search(heard or ""):
+        return text
+    action = STAGE_DIRECTION.match(text)
+    lead = action.group(1) if action else ""
+    sentences = [OATH.sub("", part) for part in SENTENCES.split(text[len(lead):].strip()) if part]
+    while sentences and SERMON.search(sentences[0]):
+        sentences.pop(0)
+    while sentences and SERMON.search(sentences[-1]):
+        sentences.pop()
+    if not sentences:
+        return ""
+    return (lead + " ".join(sentences)).strip()
+
+
+# A Darkspear troll's drawl, kept the same every time by a filter, because a small model forgets it: "the" is "da", "this" is "dis". Only whole words
+# and never inside a link, a name or a number, so "Thrall" and "Thunder Bluff" are untouched.
+TROLL_WORDS = {"the": "da", "this": "dis", "that": "dat", "these": "dese", "those": "dose", "them": "dem", "they": "dey", "there": "dere", "then": "den",
+               "than": "dan", "with": "wit", "you": "ya", "your": "yer", "my": "me"}
+TROLL_PATTERN = re.compile(r"\b(%s)\b" % "|".join(TROLL_WORDS), re.I)
+HYPERLINK = re.compile(r"(\|c[0-9a-fA-F]{8}\|H.+?\|h\[.*?\]\|h\|r|\[\[\d+\]\])")
+
+
+def accent(race, text):
+    """The text as a person of this people says it: only trolls have an accent that a filter can keep, and links are left alone."""
+    if race != "Troll" or not text:
+        return text
+
+    def swap(match):
+        word = match.group(1)
+        out = TROLL_WORDS[word.lower()]
+        return out.capitalize() if word[0].isupper() else out
+    return "".join(part if HYPERLINK.fullmatch(part) else TROLL_PATTERN.sub(swap, part) for part in HYPERLINK.split(text))
+
+
 # {link} is a title, not a place: "beneath {link}" was written more than once.
 LINK_AS_PLACE = re.compile(r"\b(?:beneath|under|above|upon|across|through|inside|into|toward|towards|within|behind|over|past)\s+\{link\}", re.I)
 

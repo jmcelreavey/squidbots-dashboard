@@ -21,8 +21,10 @@ MAX_CHARS = 110             # what a bot is asked for
 # What is let through. Models overshoot a character count, and a line cut at the number it was asked for ended mid-sentence
 # ("...so you're already among..."), so a little over is fine; past this the line is shortened to a whole sentence.
 CUT_CHARS = 160
-RP_MAX_CHARS = 150          # roleplay lines run a little longer than chat lines: they are speech, not typing
-RP_CUT_CHARS = 210
+RP_MAX_CHARS = 90           # overheard roleplay chat, bots among themselves, greetings: a few words or one short sentence
+RP_CUT_CHARS = 130
+RP_TALK_MAX_CHARS = 160     # a player really talking with the bot: a little more, still plain
+RP_TALK_CUT_CHARS = 220
 SCENE_WAIT = 12             # seconds a bot waits its turn to answer
 SILENT = re.compile(r"^\W*\(?\s*(?:silent|nothing|no reply|\.\.\.)\s*\)?\W*$", re.I)
 
@@ -259,13 +261,15 @@ class Ambient:
             shown = message
             for number, link in enumerate(links, 1):
                 shown = shown.replace(link, "[[%d]]" % number, 1)
+            talking = False
             system = self._system(persona, body, ident, shown, True, rewrite=True, links=links, context=context)
             lines = ["Write %s's line now." % (bot_name or "your")]
         else:
             self.hear(key, speaker, message)
             history = self.recent(key)
             topic = self._topic_here(key, [text for _, _, text in history], persona.get("rp"))
-            system = self._system(persona, body, ident, message, speaker_is_bot, topic=topic, bond=bond, speaker=speaker, context=context)
+            talking = self._in_conversation(speaker_is_bot, addressed, bot_name, history)
+            system = self._system(persona, body, ident, message, speaker_is_bot, topic=topic, bond=bond, speaker=speaker, context=context, talking=talking)
             lines = ["Recent chat here:"] + ["[%s] %s" % (who, text) for _, who, text in history[-10:]]
             if speaker_is_bot:
                 lines.append(self._answering_a_bot(key, speaker, message, bot_name))
@@ -285,9 +289,12 @@ class Ambient:
             return {"text": "", "reason": str(failure)[:200]}
         raw = ((answer.get("choices") or [{}])[0].get("message") or {}).get("content") or ""
         roleplay = bool(persona.get("rp"))
-        text = filters.clean(raw, (RP_CUT_CHARS if roleplay else REWRITE_CHARS) if rewrite else (RP_CUT_CHARS if roleplay else CUT_CHARS),
+        cut = RP_TALK_CUT_CHARS if talking else RP_CUT_CHARS
+        text = filters.clean(raw, (cut if roleplay else REWRITE_CHARS) if rewrite else (cut if roleplay else CUT_CHARS),
                              filters.blocked_list(store.setting("blocked_words")), bot_name, whole_thought=True)
         text = text.strip().strip('"“”').strip()
+        if roleplay and text:
+            text = self._said(persona, rp_bank.strip_sermon(text, message))
         if rewrite and text:
             # The links went in as [[1]], [[2]]: put each back where the model wrote it, once. A model that lost one or wrote
             # its own gets the stock line instead of a broken link.
@@ -306,6 +313,18 @@ class Ambient:
         self.hear(key, bot_name or "?", text)
         gateway._log_turn(turn, dict(meta, reply=text, tool_calls="", ok=1), force=True)
         return {"text": text, "latency_ms": meta["latency_ms"], "cost_usd": meta["cost_usd"]}
+
+    @staticmethod
+    def _said(persona, text):
+        """What a character says as its people say it: a troll's drawl is kept by a filter, since a small model forgets it."""
+        return rp_bank.accent(persona.get("race"), text) if persona.get("rp") and text else text
+
+    def _in_conversation(self, speaker_is_bot, addressed, bot_name, history):
+        """A player is really talking with this bot: spoken to by name, or answering a line the bot said a moment ago. Anything else (bots
+        among themselves, a remark in passing) is chat, and chat is short."""
+        if speaker_is_bot:
+            return False
+        return addressed or any(who == bot_name for _, who, _ in history[-5:-1])
 
     def _answering_a_bot(self, key, bot, message, me=""):
         """What a bot (`me`) is told about the line it answers when that line is another bot's. With a player in the talk the talk is
@@ -445,7 +464,7 @@ class Ambient:
         if not rows:
             return {"text": "", "reason": "the bank has no call for this kind of person"}
         chosen = rows[int(self.rng() * len(rows)) % len(rows)]
-        text = bank_module.fill(chosen["text"], mob=mob)
+        text = self._said(persona, bank_module.fill(chosen["text"], mob=mob))
         if not text or "{" in text:
             return {"text": "", "reason": "the line needed something we do not have"}
         gateway.bank.used(guid, chosen["id"])
@@ -502,6 +521,7 @@ class Ambient:
             return {"text": "", "reason": str(failure)[:200]}
         raw = ((answer.get("choices") or [{}])[0].get("message") or {}).get("content") or ""
         text = filters.clean(raw, RP_CUT_CHARS, filters.blocked_list(store.setting("blocked_words")), ident.bot_name, whole_thought=True).strip().strip('"“”').strip()
+        text = self._said(persona, rp_bank.strip_sermon(text))
         if not text or SILENT.match(text) or rp_bank.META.search(text) or rp_bank.ANACHRONISM.search(text):
             gateway._log_turn(turn, dict(meta, reply=text or "(silent)", tool_calls="", ok=1), force=True)
             return {"text": "", "reason": "silent"}
@@ -539,7 +559,7 @@ class Ambient:
             return {"text": "", "reason": "the bank has no line for this"}
         chosen = rows[int(self.rng() * len(rows)) % len(rows)]
         player = str(body.get("player_name") or "")[:40]
-        text = bank_module.fill(chosen["text"], player=player, zone=str(body.get("zone") or ""), klass=str(body.get("class") or ""))
+        text = self._said(persona, bank_module.fill(chosen["text"], player=player, zone=str(body.get("zone") or ""), klass=str(body.get("class") or "")))
         if not text or "{" in text:
             return {"text": "", "reason": "the line needed something we do not have"}
         gateway.bank.used(guid, chosen["id"])
@@ -607,7 +627,7 @@ class Ambient:
             "HOW TO REPLY\nAnswer in ONE or TWO short sentences, at most %d characters, as this person would aloud. Know only what someone in your place would "
             "know: for what you cannot know, say so as a local would. Say errand or task, never 'quest', and never mention levels, experience, the game, "
             "servers, an AI or a bot. Do not invent named people or places you are not sure of. No quotation marks, no markdown. A brief *action* is "
-            "fine now and then." % RP_MAX_CHARS])
+            "fine now and then." % RP_TALK_MAX_CHARS])
         lines = ["Recent talk:"] + ["[%s] %s" % (who, text) for _, who, text in talk[-4:]] if talk else []
         lines += ["[%s] %s" % (player, message), "Write %s's answer now." % npc]
         request = {"messages": [{"role": "system", "content": system}, {"role": "user", "content": "\n".join(lines)}], "temperature": 0.8}
@@ -619,7 +639,7 @@ class Ambient:
             gateway._log_turn(turn, dict(profile=name, ok=0, error=str(failure)), force=False)
             return {"text": "", "reason": str(failure)[:200]}
         raw = ((answer.get("choices") or [{}])[0].get("message") or {}).get("content") or ""
-        text = filters.clean(raw, RP_CUT_CHARS, filters.blocked_list(store.setting("blocked_words")), npc, whole_thought=True).strip().strip('"“”').strip()
+        text = filters.clean(raw, RP_TALK_CUT_CHARS, filters.blocked_list(store.setting("blocked_words")), npc, whole_thought=True).strip().strip('"“”').strip()
         if not text or SILENT.match(text) or rp_bank.META.search(text) or rp_bank.ANACHRONISM.search(text):
             gateway._log_turn(turn, dict(meta, reply=text or "(silent)", tool_calls="", ok=1), force=True)
             return {"text": "", "reason": "silent"}
@@ -643,17 +663,17 @@ class Ambient:
     JOINED = ("WELCOME\n%s has just joined your guild. Welcome them in ONE short line, one or two short sentences and at most %d characters: by name, warm, in "
               "your own voice, the way a guildmate would. No quotation marks, no markdown, never say you are an AI or a bot.")
 
-    RP_WELCOME = ("A FAMILIAR FACE\n%s has just arrived, and you are glad to see them. Say ONE short line aloud, one or two short sentences and at "
+    RP_WELCOME = ("A FAMILIAR FACE\n%s has just arrived, and you are glad to see them. Say ONE short line aloud, a single short sentence of at "
                   "most %d characters, the way you greet someone you know who has come back: by name, warm, in your own voice and your people's "
                   "way. If you remember something about them, mention it lightly; if you do not know them, a plain friendly greeting. Ask at most "
                   "one thing. No quotation marks, no markdown, never mention an AI, a bot or a game.")
 
-    RP_ENCOUNTER = ("A FAMILIAR FACE ON THE ROAD\n%s has just come near you. If you know them (see what you remember), greet them in ONE short line, one or "
-                    "two short sentences and at most %d characters: by name, in the way you feel about them, mentioning something you remember "
+    RP_ENCOUNTER = ("A FAMILIAR FACE ON THE ROAD\n%s has just come near you. If you know them (see what you remember), greet them in ONE short line, a "
+                    "single short sentence of at most %d characters: by name, in the way you feel about them, mentioning something you remember "
                     "lightly if it fits. If you do not know them, a short hail, as a stranger would. No quotation marks, no markdown, never mention "
                     "an AI, a bot or a game.")
 
-    RP_JOINED = ("A NEW FELLOW\n%s has just joined your guild. Welcome them in ONE short line, one or two short sentences and at most %d "
+    RP_JOINED = ("A NEW FELLOW\n%s has just joined your guild. Welcome them in ONE short line, a single short sentence of at most %d "
                  "characters: by name, warm, in your own voice and your people's way, as a guild-fellow would. No quotation marks, no markdown, "
                  "never mention an AI, a bot or a game.")
 
@@ -717,6 +737,7 @@ class Ambient:
         raw = ((answer.get("choices") or [{}])[0].get("message") or {}).get("content") or ""
         text = filters.clean(raw, RP_CUT_CHARS if roleplay else CUT_CHARS, filters.blocked_list(store.setting("blocked_words")), bot_name,
                              whole_thought=True).strip().strip('"“”').strip()
+        text = self._said(persona, rp_bank.strip_sermon(text)) if roleplay else text
         if not text or SILENT.match(text):
             return {"text": "", "reason": "silent"}
         store.note_seen(guid, player_guid, player)
@@ -807,7 +828,7 @@ class Ambient:
             try:
                 picked, joins = self._jev_pick(rows, fill, persona, body, history, speaker, speaker_is_bot)
                 picker = "bank+jev"
-                cost = jev.PRICE_PER_M_INPUT * 700 / 1e6
+                cost = jev.price_per_m_input() * 700 / 1e6
                 if picked is None:
                     if speaker_is_bot:
                         self._log_bank(body, ident, speaker, "(passed)", picker, started, cost, key, "", rewrite)
@@ -818,7 +839,7 @@ class Ambient:
                 chosen = rows[0]
         if bank_module.needs(chosen["text"], "level") and not body.get("level"):
             return None       # "grats on {level}" with no level to say
-        text = fill(chosen["text"])
+        text = self._said(persona, fill(chosen["text"]))
         if not text:
             return None
         bank.used(ident.bot_guid, chosen["id"])
@@ -917,10 +938,10 @@ class Ambient:
                    "completion_tokens": 0, "cached_tokens": 0, "cost_usd": cost, "reply": text, "tool_calls": "", "ok": 1}
         gateway._log_turn(turn, outcome, force=True)
 
-    def _system(self, persona, body, ident, message, speaker_is_bot, rewrite=False, links=(), topic="", bond=None, speaker="", context=None):
+    def _system(self, persona, body, ident, message, speaker_is_bot, rewrite=False, links=(), topic="", bond=None, speaker="", context=None, talking=False):
         store = self.gateway.store
         if persona.get("rp"):
-            return self._rp_system(persona, body, ident, message, speaker_is_bot, rewrite, links, topic, bond, speaker, context or {})
+            return self._rp_system(persona, body, ident, message, speaker_is_bot, rewrite, links, topic, bond, speaker, context or {}, talking)
         parts = [prompt.persona_block(persona, store.setting("style_rules"), "", actions=False)]
         where = WHERE.get(str(body.get("channel") or "say"), WHERE["say"])
         place = str(body.get("zone") or "").strip()
@@ -962,10 +983,11 @@ class Ambient:
         return "\n\n".join(parts)
 
 
-    def _rp_system(self, persona, body, ident, message, speaker_is_bot, rewrite, links, topic, bond, speaker, context):
+    def _rp_system(self, persona, body, ident, message, speaker_is_bot, rewrite, links, topic, bond, speaker, context, talking=False):
         """The same as `_system` for a character in the lore: who they are, their story and what they are doing, then the scene."""
         store = self.gateway.store
-        parts = [self.gateway.rp.block(persona, context, store.setting("rp_rules"), "", False, True, prompt.TYPING_RULE, "", RP_MAX_CHARS)]
+        limit = RP_TALK_MAX_CHARS if talking else RP_MAX_CHARS
+        parts = [self.gateway.rp.block(persona, context, store.setting("rp_rules"), "", False, True, prompt.TYPING_RULE, "", limit)]
         parts.append("WHERE YOU ARE\nYou are %s." % rp_module.WHERE.get(str(body.get("channel") or "say"), rp_module.WHERE["say"]))
         if rewrite:
             if links:
@@ -975,7 +997,7 @@ class Ambient:
                         "becomes a clickable link, so never also write the name itself. " % names)
             else:
                 keep = ""
-            parts.append(rp_module.REWRITE % (situation(str(body.get("category") or "")), message, keep, RP_MAX_CHARS))
+            parts.append(rp_module.REWRITE % (situation(str(body.get("category") or "")), message, keep, limit))
             return "\n\n".join(parts)
         if not speaker_is_bot and ident.player_guid:
             recalled = memory.recall(store, ident.bot_guid, ident.player_guid, message)[:2]
@@ -985,7 +1007,7 @@ class Ambient:
         if bond and speaker:
             parts.append("BETWEEN YOU\n%s and you are %s%s. Speak as people who know each other." % (
                 community_module.short_name(speaker), bond["kind"], (": " + bond["note"].rstrip(".")) if bond.get("note") else ""))
-        parts.append(rp_module.HOW % RP_MAX_CHARS)
+        parts.append((rp_module.HOW if talking else rp_module.HOW_BRIEF) % limit)
         if topic in rp_bank.TOPICS:
             parts.append("THE SUBJECT\nThe talk here is about %s. Stay with it unless the last line changed the subject." % rp_bank.TOPICS[topic][1])
         parts.append("THIS TIME\n" + rp_module.register(self.rng))
@@ -1008,7 +1030,7 @@ class Ambient:
     SPEAK_UP = ("HOW TO SPEAK UP\nNobody has spoken to you; you decide to say something aloud, as a person does when something crosses their "
                 "mind. It comes from what you are doing or where you are right now (the place, the weather, an errand, a memory it stirs, "
                 "something you know about this land) or from your own story. Do not recite your errands like a list or announce them like a "
-                "chore: mention at most one, in your own words. Say ONE thing, one or two short sentences, at most %d characters, no "
+                "chore: mention at most one, in your own words. Say ONE thing, a single short sentence, at most %d characters, no "
                 "quotation marks, no markdown, never mention an AI, a bot or a game. A brief *action* is fine now and then. It must make sense "
                 "to someone who knows nothing of what you are doing.")
 
@@ -1024,11 +1046,16 @@ class Ambient:
         recent = [text for _, _, text in self.recent(key)]
         name = store.profile_for("ambient", guid) or store.profile_for("fast", guid)
         live = int(store.setting("rp_start_llm"))
+        if name and gateway.rp.pending_rumour(guid, context) and self.rng() < 0.6:
+            text = self._start_written(persona, ident, channel, key, context, name, recent, started, gossip=1.0)     # news to pass on
+            if text:
+                return text
         if name and live and (context.get("quests") or context.get("zone")) and self.rng() * 100 < live:
             text = self._start_written(persona, ident, channel, key, context, name, recent, started)
             if text:
                 return text
         friends = [item for item in (body.get("friends") or []) if isinstance(item, dict) and item.get("name") and item.get("guid")]
+        topics = rp_module.start_weights(context, topics)        # the hour of the day and a place in the guild lean what it feels like saying
         total = sum(weight for _, weight in topics)
         roll, order = self.rng() * total, []
         for situation_name, weight in topics:
@@ -1054,8 +1081,8 @@ class Ambient:
             return {"text": "", "reason": "the roleplay bank has no opening line for this kind of person"}
         chosen = rows[int(self.rng() * len(rows)) % len(rows)]
         to_friend = friend if friend and chosen["situation"] == "rp_idle_friend" else None
-        text = bank_module.fill(chosen["text"], zone=zone, klass=str(context.get("klass") or ""),
-                                friend=community_module.short_name(to_friend["name"]) if to_friend else "")
+        text = self._said(persona, bank_module.fill(chosen["text"], zone=zone, klass=str(context.get("klass") or ""),
+                                                    friend=community_module.short_name(to_friend["name"]) if to_friend else ""))
         if not text or "{" in text:
             return {"text": "", "reason": "the line needed something we do not have"}
         gateway.bank.used(guid, chosen["id"])
@@ -1070,11 +1097,11 @@ class Ambient:
             answer["addressed_guid"] = int(to_friend["guid"])
         return answer
 
-    def _start_written(self, persona, ident, channel, key, context, name, recent, started):
+    def _start_written(self, persona, ident, channel, key, context, name, recent, started, gossip=0.35):
         """A model writes the remark from the character, where it is and what it is busy with. {} when it had nothing to say."""
         gateway, store = self.gateway, self.gateway.store
         system = "\n\n".join([
-            gateway.rp.block(persona, context, store.setting("rp_rules"), "", False, True, prompt.TYPING_RULE, "", RP_MAX_CHARS),
+            gateway.rp.block(persona, context, store.setting("rp_rules"), "", False, True, prompt.TYPING_RULE, "", RP_MAX_CHARS, gossip=gossip),
             "WHERE YOU ARE\nYou are %s." % rp_module.WHERE.get(channel, rp_module.WHERE["say"]),
             self.SPEAK_UP % RP_MAX_CHARS])
         lines = ["Recent talk here:"] + ["[%s] %s" % (who, text) for _, who, text in self.recent(key)[-6:]] if recent else []
@@ -1091,6 +1118,7 @@ class Ambient:
         raw = ((answer.get("choices") or [{}])[0].get("message") or {}).get("content") or ""
         text = filters.clean(raw, RP_CUT_CHARS, filters.blocked_list(store.setting("blocked_words")), ident.bot_name,
                              whole_thought=True).strip().strip('"“”').strip()
+        text = self._said(persona, rp_bank.strip_sermon(text))
         if not text or SILENT.match(text) or rp_bank.META.search(text) or rp_bank.ANACHRONISM.search(text):
             gateway._log_turn(turn, dict(meta, reply=text or "(silent)", tool_calls="", ok=1), force=True)
             return None

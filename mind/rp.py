@@ -200,6 +200,28 @@ def clean_context(raw):
     for key in ("time", "weather"):
         if raw.get(key):
             ctx[key] = _clip(raw[key], 20)
+    if raw.get("guild"):
+        ctx["guild"] = _clip(raw["guild"], 40)
+        try:
+            ctx["guild_rank"] = max(0, min(20, int(raw.get("guild_rank"))))
+        except (TypeError, ValueError):
+            pass
+        if raw.get("guild_rank_name"):
+            ctx["guild_rank_name"] = _clip(raw["guild_rank_name"], 30)
+    rumours = []
+    for item in (raw.get("rumours") if isinstance(raw.get("rumours"), list) else [])[:10]:
+        if len(rumours) >= 3:
+            break
+        if not isinstance(item, dict) or not _clip(item.get("who"), 40) or not _clip(item.get("t"), 120):
+            continue
+        try:
+            ago, near, ident = max(0, int(item.get("ago") or 0)), min(2, max(0, int(item.get("near") or 0))), int(item.get("id") or 0)
+        except (TypeError, ValueError):
+            continue
+        rumours.append({"who": _clip(item["who"], 40), "k": _clip(item.get("k") or "event", 12), "t": _clip(item["t"], 120), "zone": _clip(item.get("zone"), 40),
+                        "ago": ago, "near": near, "id": ident})
+    if rumours:
+        ctx["rumours"] = rumours
     holidays = raw.get("holidays")
     if isinstance(holidays, list):
         ctx["holidays"] = [_clip(h, 40) for h in holidays[:3] if _clip(h, 40)]
@@ -420,7 +442,87 @@ def ago_text(seconds):
     return "%d days ago" % round(seconds / 86400)
 
 
-def now_text(character, ctx, level_known=True, events=(), flavors=None):
+# ---- the hour of the day, the guild, and what is being said -----------------------------------------------------------------------------------
+
+# What a person is usually about at each hour (the game sends "dawn" to "night"). It colours what they say and what they start talking about:
+# at night a tavern's talk, by day the work. It is the words that follow the hour, not the bots' feet.
+PHASES = {
+    "dawn": "The day is just starting: you are stiff from the night and getting ready for the road.",
+    "morning": "It is morning: you are fresh and about your errands and your work.",
+    "midday": "It is midday: you are working, or having something quick to eat before going on.",
+    "afternoon": "It is afternoon: you are still at your errands, a little tired.",
+    "dusk": "It is dusk: you are finishing up and thinking of a roof, a fire and a meal.",
+    "night": "It is night: you are off duty, at a fire or an inn, tired but willing to talk, with no mind to work.",
+}
+# How much more or less likely each kind of unprompted remark is at an hour (anything not listed is 1).
+PHASE_TOPICS = {
+    "dawn": {"rp_idle_work": 1.5, "rp_idle_scenery": 2, "rp_idle_camp": 0.6, "rp_idle_humor": 0.7},
+    "morning": {"rp_idle_work": 2, "rp_idle_zone": 1.5, "rp_idle_camp": 0.4, "rp_idle_homesick": 0.6},
+    "midday": {"rp_idle_work": 2, "rp_idle_zone": 1.3, "rp_idle_camp": 0.5},
+    "afternoon": {"rp_idle_work": 1.5, "rp_idle_zone": 1.3, "rp_idle_camp": 0.8},
+    "dusk": {"rp_idle_camp": 1.8, "rp_idle_humor": 1.4, "rp_idle_work": 0.8},
+    "night": {"rp_idle_camp": 3, "rp_idle_humor": 2, "rp_idle_story": 2, "rp_idle_homesick": 2, "rp_idle_muse": 1.5, "rp_idle_work": 0.3, "rp_idle_zone": 0.5},
+}
+
+# A guild gives a bot a place, and a place gives it a manner that does not change from one day to the next.
+GUILD_ROLES = {
+    "master": "You lead the guild. You speak with quiet authority: you say what the guild will do, welcome newcomers by name and settle quarrels. You "
+              "rarely joke and you never gossip idly.",
+    "officer": "You are an officer, trusted to keep order. You are practical, direct and a little dry: you pass on the master's word, ask who is free "
+               "for an errand and look after the newer members.",
+    "member": "You are a member, easy among your guild-fellows: you trade stories, ask the officers what is planned and take part in the talk.",
+    "new": "You are new to the guild: eager, polite, asking more than you tell, and glad to be included.",
+}
+# How likely each unprompted remark is for each place in the guild.
+ROLE_TOPICS = {
+    "master": {"rp_idle_work": 1.5, "rp_idle_question": 1.4, "rp_idle_war": 1.3, "rp_idle_humor": 0.5},
+    "officer": {"rp_idle_work": 1.4, "rp_idle_question": 1.3, "rp_idle_humor": 0.8},
+    "member": {"rp_idle_humor": 1.3, "rp_idle_story": 1.2},
+    "new": {"rp_idle_question": 1.8, "rp_idle_story": 0.6},
+}
+NEWCOMER_RANKS = ("initiate", "recruit", "trial", "neophyte", "novice", "new ")
+
+
+def guild_role(ctx):
+    """"master", "officer", "member" or "new" for a bot in a guild (rank 0 is the master, 1 the officers), else ''."""
+    if not ctx.get("guild"):
+        return ""
+    rank, name = ctx.get("guild_rank"), str(ctx.get("guild_rank_name") or "").lower()
+    if rank == 0:
+        return "master"
+    if rank == 1 or any(word in name for word in ("officer", "lieutenant", "captain", "warden")):
+        return "officer"
+    if any(word in name for word in NEWCOMER_RANKS) or (not name and isinstance(rank, int) and rank >= 4):      # the game's default ranks end with Initiate
+        return "new"
+    return "member"
+
+
+def start_weights(ctx, topics):
+    """The unprompted remarks a bot may start with, [(situation, weight)], leaning with the hour and with its place in a guild."""
+    phase, role = PHASE_TOPICS.get(ctx.get("time") or "", {}), ROLE_TOPICS.get(guild_role(ctx), {})
+    return [(name, weight * phase.get(name, 1) * role.get(name, 1)) for name, weight in topics]
+
+
+RUMOUR_DELAY = {2: 120, 1: 420, 0: 1500}   # seconds before a bot has heard: it is in the same guild, the same zone, or neither
+RUMOUR_LIFE = 6 * 3600
+RUMOUR_COOLDOWN = 900                       # a bot passes on one piece of news in a quarter of an hour at most
+HEARD = {2: "A guildmate told you", 1: "Someone nearby mentioned", 0: "Word has reached you, secondhand and a little garbled,"}
+VAGUE = {"death": "took a bad fall in a fight and had to be raised", "levelup": "has come into new strength lately"}
+
+
+RUMOUR_STARTERS = ("Heard", "They say", "Word is", "Rumour has it", "I was told")
+
+
+def rumour_text(item, guid=0):
+    """What a bot has heard about someone, as news it did not see: said as hearsay, in a few words, and only if it fits."""
+    who = first_name(item["who"]) or item["who"]
+    fact = item["t"] if item["near"] else VAGUE.get(item["k"], item["t"])
+    starter = RUMOUR_STARTERS[(item["id"] + guid) % len(RUMOUR_STARTERS)]        # not the same words from every bot
+    return ("%s that %s %s (%s). You were not there and cannot be sure: if it fits what is being said, pass it on in a few words of your own, "
+            "beginning with \"%s\"; never say you saw it, and never as an announcement." % (HEARD[item["near"]], who, fact.rstrip("."), ago_text(item["ago"]), starter))
+
+
+def now_text(character, ctx, level_known=True, events=(), flavors=None, extras=()):
     lines = []
     level = ctx.get("level") or character.get("level") or 0
     if level and level_known:
@@ -431,9 +533,14 @@ def now_text(character, ctx, level_known=True, events=(), flavors=None):
         lines.append("You are in %s" % text)
     elif zone:
         lines.append("You are in %s%s." % (zone, (", near " + ctx["area"]) if ctx.get("area") and ctx["area"] != zone else ""))
-    air = [part for part in (("it is %s" % ctx["time"]) if ctx.get("time") else "", ("the weather is %s" % ctx["weather"]) if ctx.get("weather") else "") if part]
+    air = [part for part in (("it is %s" % ctx["time"]) if ctx.get("time") and ctx["time"] not in PHASES else "",
+                             ("the weather is %s" % ctx["weather"]) if ctx.get("weather") else "") if part]
     if air:
         lines.append("Around you %s." % ", and ".join(air))
+    if PHASES.get(ctx.get("time") or ""):
+        lines.append(PHASES[ctx["time"]])
+    if guild_role(ctx):
+        lines.append("In your guild, %s, %s" % (ctx["guild"], GUILD_ROLES[guild_role(ctx)]))
     if ctx.get("holidays"):
         lines.append("The people about you are keeping %s." % " and ".join(ctx["holidays"]))
     if ctx.get("doing"):
@@ -449,6 +556,7 @@ def now_text(character, ctx, level_known=True, events=(), flavors=None):
     if recent:
         lines.append("What has happened to you lately (you may bring it up when it fits, never as a list): %s."
                      % "; ".join("%s (%s)" % (e["text"], ago_text(int(e.get("ago") if "ago" in e else max(0, time.time() - e["ts"])))) for e in recent[:5]))
+    lines.extend(line for line in extras if line)
     return "\n".join(lines)
 
 
@@ -461,7 +569,7 @@ def persona_block(character, ctx, chapters, rules, guard="", actions=True, compa
 
 
 def persona_parts(character, ctx, chapters, rules, guard="", actions=True, compact=False, typing="", action_rule="", max_chars=0,
-                  voice_lines=(), events=(), flavors=None):
+                  voice_lines=(), events=(), flavors=None, extras=()):
     """(the part of the prompt that stays the same from one message to the next, what is true right now). A provider caches a prompt by
     its longest unchanged start, so the sheet, the story and the rules go first and where the bot is and what it is doing go last."""
     race, info = character["race"], lore.RACES[character["race"]]
@@ -479,6 +587,10 @@ def persona_parts(character, ctx, chapters, rules, guard="", actions=True, compa
     out.append("Your people: the %s of the %s, whose capital is %s and whose ruler is %s." % (PEOPLE[race], info["faction"], info["capital"], info["ruler"]))
     out.append("Temperament: %s." % character["traits"])
     out.append("How you talk: %s." % character["speech"])
+    voice = lore.RACE_VOICE.get(race)
+    if voice:
+        tics = random.Random("voice:%s" % (character.get("bot_guid") or character.get("name") or "")).sample(voice[1], min(2, len(voice[1])))
+        out.append("The way your people talk, every time: %s. Two small habits that are your own, shown only now and then and never forced into a line: %s." % (voice[0], "; ".join(tics)))
     out.append("What you believe: %s Your own convictions: %s." % (info["beliefs"], character["convictions"]))
     out.append("What you want most: %s" % character["goal"])
     if not compact:
@@ -491,7 +603,7 @@ def persona_parts(character, ctx, chapters, rules, guard="", actions=True, compa
         out.append("Your homeland: %s. What you love of home: %s." % (info["homeland"], ", ".join(info["culture"][:4])))
         out.append("How your people see others: %s." % _views(race))
         out.append("Those your people fight: %s." % ", ".join(info["enemies"]))
-        out.append("Sayings you might use: %s" % " / ".join(info["sayings"]))
+        out.append("Sayings your people use (rarely: one line in ten at most, and never to open or close a reply): %s" % " / ".join(info["sayings"]))
         out.append("Crafts you may meet on the road, besides the old ones: %s." % lore.crafts_note())
     story = story_text(character, chapters, compact)
     if story:
@@ -514,7 +626,7 @@ def persona_parts(character, ctx, chapters, rules, guard="", actions=True, compa
                    "so in character. If you are asked what you wear, carry or hold, look with your tools instead of guessing. If something does not work, never quote an error, a tool or an action name: say in character that it did not come off.")
     if guard:
         out.append(guard)
-    now = now_text(character, ctx, events=events, flavors=flavors)
+    now = now_text(character, ctx, events=events, flavors=flavors, extras=extras)
     return "\n".join(out), ("RIGHT NOW\n" + now) if now else ""
 
 
@@ -532,7 +644,7 @@ RP_REGISTERS = [
     ("wry", 10, "Answer with a dry remark that only someone of your temperament would make."),
     ("guarded", 8, "Be a little guarded, as your people are with strangers, but not rude."),
     ("story", 8, "Let one small detail of your own past or homeland slip into the answer."),
-    ("lore", 8, "Mention something your people believe or know about the place or the matter at hand."),
+    ("lore", 8, "Mention one plain thing your people know about the place or the matter at hand."),
     ("brief", 8, "Reply in a few words, in character: 'Aye.', 'Well met.', 'So it goes.'"),
 ]
 
@@ -553,17 +665,29 @@ WHERE = {
     "trade": "the market's call-board",
     "lfg": "the call-board where travellers find company",
     "world": "a shout carried to every corner of the world",
-    "guild": "the fireside talk of your guild-fellows: only they can hear you, and you all know one another",
+    "guild": "guild chat: only your guild-fellows can hear you and you all know one another, so the talk is plain and practical, like workmates on a break",
 }
 
+# What keeps a guild chat from sounding like a sermon.
+DIRECT = ("Be direct, like a person chatting with people they know: no blessings, prayers or invocations of the Light, Elune, the ancestors or the "
+          "spirits as a greeting, a farewell or filler (never 'Elune watch over you', 'by the Light', 'may the ancestors guide you'); mention your "
+          "faith only when the talk is about faith, and then in a sentence. No speeches, no riddles, no poetry, no describing the scenery. ")
+
 HOW = ("HOW TO REPLY\n"
-       "Say ONE thing aloud, in character, at most %d characters: usually one or two short sentences. Answer what was just said and "
-       "keep the scene going: stay on its subject, answer any question (briefly and honestly, and if you do not know, say so as "
-       "your character would), and now and then add something of your own or ask something back. Only the first to answer a "
-       "greeting welcomes the newcomer; if someone already has, say something of your own or speak to the other person instead. "
-       "Vary how you begin and never repeat what others said. You may address someone by name. A brief *action* in asterisks is "
-       "allowed now and then. No quotation marks around the line, no markdown, and never mention an AI, a bot or a game. If you truly have "
-       "nothing to add, or the line is not for you, answer exactly (silent).")
+       "A real conversation: a player is talking with you, so you may say a little more, but still plainly. Say ONE thing aloud, in character, at "
+       "most %d characters: usually one or two short sentences. Answer what was just said first, directly and in everyday words, then, if it fits, add "
+       "something of your own or ask something back. If you do not know, say so as your character would. " + DIRECT + "Vary how you begin and "
+       "never repeat what others said. You may address someone by name. A brief *action* in asterisks is allowed now and then. No quotation marks "
+       "around the line, no markdown, and never mention an AI, a bot or a game. If you truly have nothing to add, or the line is not for you, "
+       "answer exactly (silent).")
+
+# Overheard chat, bots among themselves, greetings and idle remarks: the way people actually type in a channel.
+HOW_BRIEF = ("HOW TO REPLY\n"
+             "Say ONE short thing aloud, in character, at most %d characters: a few words or a single short sentence, the way people talk in chat "
+             "('Aye, saw it.', 'Road's clear past the bridge.', 'Not for me, thanks.'). Answer what was just said first, plainly; add a second "
+             "sentence only if the answer truly needs one. Just say it: do not narrate yourself in asterisks. " + DIRECT + "Vary how you begin and never repeat what others said. You may address "
+             "someone by name. No quotation marks, no markdown, and never mention an AI, a bot or a game. If you truly have nothing to add, or the "
+             "line is not for you, answer exactly (silent).")
 
 
 REWRITE = ("YOUR LINE\nYou were about to say this stock line aloud (the situation: %s):\n  \"%s\"\n"
@@ -585,6 +709,7 @@ class Rp:
         self.pending = set()
         self.worker = None
         self.bank = None            # the line bank, for a character's voice examples (set by the gateway)
+        self.rng = random.random    # a test sets it, so that news is passed on when it is meant to be
         self.voices = {}            # bot guid -> its voice examples
         self.stats = {"stories": 0, "chapters": 0, "failures": 0}
 
@@ -765,14 +890,34 @@ class Rp:
         self.voices[guid] = lines
         return lines
 
-    def block_parts(self, persona, ctx, rules, guard="", actions=True, compact=False, typing="", action_rule="", max_chars=0, voices=True):
+    def pending_rumour(self, guid, ctx):
+        """The news this bot has heard and not yet passed on, or None. News about a person (a death, a level) reaches a bot after a delay
+        that depends on how near it is to them, is told once per bot, and no more often than every quarter of an hour."""
+        items = ctx.get("rumours") or []
+        if not items or not guid or time.time() - self.store.last_rumour(guid) < RUMOUR_COOLDOWN:
+            return None
+        for item in items:
+            if RUMOUR_DELAY[item["near"]] <= item["ago"] <= RUMOUR_LIFE and not self.store.rumour_told(guid, "%s:%s:%s" % (item["who"], item["k"], item["id"])):
+                return item
+        return None
+
+    def rumour(self, guid, ctx, chance=0.35):
+        """A line about news to pass on, or '': with this chance, and then it is marked told."""
+        item = self.pending_rumour(guid, ctx) if self.rng() < chance else None
+        if not item:
+            return ""
+        self.store.note_rumour(guid, "%s:%s:%s" % (item["who"], item["k"], item["id"]))
+        return rumour_text(item, guid)
+
+    def block_parts(self, persona, ctx, rules, guard="", actions=True, compact=False, typing="", action_rule="", max_chars=0, voices=True, gossip=0.35):
         row = persona["row"]
         events = [] if ctx.get("events") else self.store.rp_events(row["bot_guid"], 5)     # what the game sent is fresher than what was kept
         return persona_parts(row, ctx, self.store.rp_chapters(row["bot_guid"]), rules, guard, actions, compact, typing, action_rule, max_chars,
-                             self.voice_samples(persona) if voices else (), events, self.store.quest_flavor(ctx.get("quests") or []))
+                             self.voice_samples(persona) if voices else (), events, self.store.quest_flavor(ctx.get("quests") or []),
+                             (self.rumour(row["bot_guid"], ctx, gossip),))
 
-    def block(self, persona, ctx, rules, guard="", actions=True, compact=False, typing="", action_rule="", max_chars=0):
-        stable, now = self.block_parts(persona, ctx, rules, guard, actions, compact, typing, action_rule, max_chars, voices=not compact)
+    def block(self, persona, ctx, rules, guard="", actions=True, compact=False, typing="", action_rule="", max_chars=0, gossip=0.35):
+        stable, now = self.block_parts(persona, ctx, rules, guard, actions, compact, typing, action_rule, max_chars, voices=not compact, gossip=gossip)
         return "\n".join(part for part in (stable, now) if part)
 
 
